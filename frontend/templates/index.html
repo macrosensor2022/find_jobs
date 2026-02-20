@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Search Dashboard - Summer 2026 Co-op</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-briefcase"></i>
+                    <span>JobTracker</span>
+                </div>
+                <p class="subtitle">Summer 2026 Co-op Search</p>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-view="dashboard">
+                    <i class="fas fa-home"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-view="jobs">
+                    <i class="fas fa-list"></i>
+                    <span>All Jobs</span>
+                </a>
+                <a href="#" class="nav-item" data-view="favorites">
+                    <i class="fas fa-star"></i>
+                    <span>Favorites</span>
+                </a>
+                <a href="#" class="nav-item" data-view="applied">
+                    <i class="fas fa-paper-plane"></i>
+                    <span>Applied</span>
+                </a>
+                <a href="#" class="nav-item" data-view="scraper">
+                    <i class="fas fa-search"></i>
+                    <span>Scraper</span>
+                </a>
+                <a href="#" class="nav-item" data-view="profile">
+                    <i class="fas fa-user"></i>
+                    <span>Profile</span>
+                </a>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="profile-card">
+                    <img src="https://github.com/macrosensor2022.png" alt="Profile" class="profile-avatar">
+                    <div class="profile-info">
+                        <span class="profile-name">Vinay Varshigan</span>
+                        <span class="profile-role">MS CS @ Northeastern</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="main-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h1 class="page-title" id="pageTitle">Dashboard</h1>
+                </div>
+                <div class="header-right">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="Search jobs..." id="globalSearch">
+                    </div>
+                    <button class="btn btn-primary" id="refreshJobs">
+                        <i class="fas fa-sync-alt"></i>
+                        <span>Refresh</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard View -->
+            <section class="view active" id="dashboardView">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon blue">
+                            <i class="fas fa-briefcase"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="totalJobs">0</span>
+                            <span class="stat-label">Total Jobs</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="newToday">0</span>
+                            <span class="stat-label">New Today</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon yellow">
+                            <i class="fas fa-star"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="favoriteJobs">0</span>
+                            <span class="stat-label">Favorites</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple">
+                            <i class="fas fa-paper-plane"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-value" id="appliedJobs">0</span>
+                            <span class="stat-label">Applied</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Jobs by Source</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="source-bars" id="sourceChart"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Application Status</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="status-list" id="statusChart"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="card full-width">
+                        <div class="card-header">
+                            <h3>Recent Jobs</h3>
+                            <a href="#" class="view-all" data-view="jobs">View All</a>
+                        </div>
+                        <div class="card-body">
+                            <div class="job-list" id="recentJobs"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Jobs View -->
+            <section class="view" id="jobsView">
+                <div class="filters-bar">
+                    <div class="filter-group">
+                        <select id="sourceFilter" class="filter-select">
+                            <option value="">All Sources</option>
+                            <option value="remoteok">RemoteOK</option>
+                            <option value="indeed">Indeed</option>
+                            <option value="themuse">The Muse</option>
+                            <option value="linkedin">LinkedIn</option>
+                            <option value="adzuna">Adzuna</option>
+                            <option value="nuworks">NUWorks</option>
+                        </select>
+                        <select id="locationFilter" class="filter-select">
+                            <option value="">All Locations</option>
+                            <option value="Maine">Maine</option>
+                            <option value="New Jersey">New Jersey</option>
+                            <option value="New York">New York</option>
+                            <option value="Texas">Texas</option>
+                            <option value="Colorado">Colorado</option>
+                            <option value="Utah">Utah</option>
+                            <option value="Nevada">Nevada</option>
+                            <option value="Arizona">Arizona</option>
+                        </select>
+                        <select id="dateFilter" class="filter-select">
+                            <option value="">All Time</option>
+                            <option value="today">Last 24 Hours</option>
+                            <option value="week">Last Week</option>
+                            <option value="month">Last Month</option>
+                        </select>
+                        <select id="statusFilter" class="filter-select">
+                            <option value="">All Status</option>
+                            <option value="not_applied">Not Applied</option>
+                            <option value="applied">Applied</option>
+                            <option value="interviewing">Interviewing</option>
+                            <option value="offer">Offer</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-secondary" id="clearFilters">
+                        <i class="fas fa-times"></i>
+                        Clear Filters
+                    </button>
+                </div>
+                
+                <div class="jobs-container">
+                    <div class="job-list" id="jobsList"></div>
+                    <div class="pagination" id="pagination"></div>
+                </div>
+            </section>
+
+            <!-- Favorites View -->
+            <section class="view" id="favoritesView">
+                <div class="jobs-container">
+                    <div class="job-list" id="favoritesList"></div>
+                </div>
+            </section>
+
+            <!-- Applied View -->
+            <section class="view" id="appliedView">
+                <div class="applied-pipeline">
+                    <div class="pipeline-column" data-status="applied">
+                        <h3><i class="fas fa-paper-plane"></i> Applied</h3>
+                        <div class="pipeline-jobs" id="appliedList"></div>
+                    </div>
+                    <div class="pipeline-column" data-status="interviewing">
+                        <h3><i class="fas fa-comments"></i> Interviewing</h3>
+                        <div class="pipeline-jobs" id="interviewingList"></div>
+                    </div>
+                    <div class="pipeline-column" data-status="offer">
+                        <h3><i class="fas fa-trophy"></i> Offers</h3>
+                        <div class="pipeline-jobs" id="offerList"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Scraper View -->
+            <section class="view" id="scraperView">
+                <div class="scraper-container">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Job Scraper</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="scraper-form">
+                                <div class="form-group">
+                                    <label>Sources (Easy API-based scrapers)</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="remoteok" checked>
+                                            <span>RemoteOK (API)</span>
+                                        </label>
+                                        <label class="checkbox-label" style="opacity: 0.5;">
+                                            <input type="checkbox" name="source" value="indeed" disabled>
+                                            <span>Indeed (RSS - Not working)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="themuse" checked>
+                                            <span>The Muse (API)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="linkedin">
+                                            <span>LinkedIn</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="adzuna">
+                                            <span>Adzuna (API key needed)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Profile Match Filter</label>
+                                    <div class="match-filter">
+                                        <span>Only show jobs with</span>
+                                        <select id="minMatchScore" class="filter-select" style="width: auto; display: inline-block;">
+                                            <option value="0">No filter</option>
+                                            <option value="20">20%+</option>
+                                            <option value="30" selected>30%+</option>
+                                            <option value="40">40%+</option>
+                                            <option value="50">50%+</option>
+                                            <option value="60">60%+</option>
+                                            <option value="70">70%+</option>
+                                        </select>
+                                        <span>match to your profile</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Keywords - Data Roles</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Data Science Intern" checked>
+                                            <span>Data Science Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Data Analyst Intern" checked>
+                                            <span>Data Analyst Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Data Engineer Intern" checked>
+                                            <span>Data Engineer Intern</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Keywords - AI/ML Roles</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Machine Learning Intern" checked>
+                                            <span>Machine Learning Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="AI Engineer Intern" checked>
+                                            <span>AI Engineer Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="NLP Engineer Intern">
+                                            <span>NLP Engineer Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="ML Engineer Intern">
+                                            <span>ML Engineer Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="AI Research Intern">
+                                            <span>AI Research Intern</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Keywords - SDE Roles</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Software Engineer Intern">
+                                            <span>Software Engineer Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="SDE Intern">
+                                            <span>SDE Intern</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Software Engineer Intern AI">
+                                            <span>SDE Intern (AI Focus)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Software Development Engineer Intern">
+                                            <span>Software Dev Engineer Intern</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Locations</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Maine" checked>
+                                            <span>Maine</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="New Jersey" checked>
+                                            <span>New Jersey</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="New York" checked>
+                                            <span>New York</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Texas">
+                                            <span>Texas</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Colorado">
+                                            <span>Colorado</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Utah">
+                                            <span>Utah</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Nevada">
+                                            <span>Nevada</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Arizona">
+                                            <span>Arizona</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <button class="btn btn-primary btn-lg" id="startScrape">
+                                    <i class="fas fa-search"></i>
+                                    Start Scraping
+                                </button>
+                            </div>
+                            
+                            <div class="scraper-status" id="scraperStatus" style="display: none;">
+                                <div class="status-message">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    <span id="statusText">Scraping in progress...</span>
+                                </div>
+                            </div>
+                            
+                            <div class="scraper-results" id="scraperResults" style="display: none;">
+                                <h4>Results</h4>
+                                <div id="resultsContent"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-university"></i> NUWorks Login (with Duo 2FA)</h3>
+                        </div>
+                        <div class="card-body">
+                            <p class="info-text">
+                                <i class="fas fa-info-circle"></i>
+                                NUWorks requires Northeastern credentials and Duo 2FA. Enter your credentials below, 
+                                then complete Duo authentication in the browser window that opens.
+                            </p>
+                            
+                            <div class="nuworks-login-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Northeastern Email</label>
+                                        <input type="email" id="nuworksUsername" placeholder="your.name@northeastern.edu">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Password</label>
+                                        <input type="password" id="nuworksPassword" placeholder="Your password">
+                                    </div>
+                                </div>
+                                
+                                <div class="nuworks-actions">
+                                    <button class="btn btn-primary" id="nuworksStartLogin">
+                                        <i class="fas fa-sign-in-alt"></i>
+                                        Start Login
+                                    </button>
+                                    <button class="btn btn-success" id="nuworksCheckDuo" style="display: none;">
+                                        <i class="fas fa-check-circle"></i>
+                                        I Completed Duo
+                                    </button>
+                                    <button class="btn btn-secondary" id="nuworksScrapeJobs" style="display: none;">
+                                        <i class="fas fa-download"></i>
+                                        Scrape NUWorks Jobs
+                                    </button>
+                                    <button class="btn btn-secondary" id="nuworksClose" style="display: none;">
+                                        <i class="fas fa-times"></i>
+                                        Close Session
+                                    </button>
+                                </div>
+                                
+                                <div class="nuworks-status" id="nuworksStatus" style="display: none;">
+                                    <div class="status-badge" id="nuworksStatusBadge">
+                                        <i class="fas fa-spinner fa-spin"></i>
+                                        <span id="nuworksStatusText">Initializing...</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="nuworks-steps">
+                                <h4>How it works:</h4>
+                                <ol>
+                                    <li>Enter your Northeastern email and password</li>
+                                    <li>Click "Start Login" - a browser window will open</li>
+                                    <li>Complete Duo 2FA (approve the push notification)</li>
+                                    <li>Click "I Completed Duo" to verify</li>
+                                    <li>Click "Scrape NUWorks Jobs" to fetch jobs</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Profile View -->
+            <section class="view" id="profileView">
+                <div class="profile-container">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Your Profile</h3>
+                        </div>
+                        <div class="card-body">
+                            <form id="profileForm">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Name</label>
+                                        <input type="text" id="profileName" value="Vinay Varshigan">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Email</label>
+                                        <input type="email" id="profileEmail" placeholder="your.email@northeastern.edu">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>GitHub URL</label>
+                                        <input type="url" id="profileGithub" value="https://github.com/macrosensor2022">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>LinkedIn URL</label>
+                                        <input type="url" id="profileLinkedin" placeholder="https://linkedin.com/in/...">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Target Role</label>
+                                    <input type="text" id="profileRole" value="Data Science / ML / Data Engineering Intern">
+                                </div>
+                                <div class="form-group">
+                                    <label>Resume Path</label>
+                                    <input type="text" id="profileResume" value="C:\Users\varsv\Downloads\big_resume_modified_datascience_dataanalyt_Dataengineer.docx (10).pdf">
+                                </div>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i>
+                                    Save Profile
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Quick Links</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="quick-links">
+                                <a href="https://github.com/macrosensor2022" target="_blank" class="quick-link">
+                                    <i class="fab fa-github"></i>
+                                    GitHub Profile
+                                </a>
+                                <a href="https://northeastern-csm.symplicity.com/students/" target="_blank" class="quick-link">
+                                    <i class="fas fa-university"></i>
+                                    NUWorks
+                                </a>
+                                <a href="https://www.linkedin.com/jobs/" target="_blank" class="quick-link">
+                                    <i class="fab fa-linkedin"></i>
+                                    LinkedIn Jobs
+                                </a>
+                                <a href="https://www.ziprecruiter.com/" target="_blank" class="quick-link">
+                                    <i class="fas fa-search"></i>
+                                    ZipRecruiter
+                                </a>
+                                <a href="https://app.joinrunway.io/explore" target="_blank" class="quick-link">
+                                    <i class="fas fa-rocket"></i>
+                                    Runway
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Job Detail Modal -->
+        <div class="modal" id="jobModal">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Job Details</h2>
+                    <button class="modal-close" id="closeModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body" id="modalBody">
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Job Modal -->
+        <div class="modal" id="addJobModal">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Add Job Manually</h2>
+                    <button class="modal-close" id="closeAddModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="addJobForm">
+                        <div class="form-group">
+                            <label>Job Title*</label>
+                            <input type="text" name="title" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Company*</label>
+                            <input type="text" name="company" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Location</label>
+                            <input type="text" name="location">
+                        </div>
+                        <div class="form-group">
+                            <label>Job URL</label>
+                            <input type="url" name="job_url">
+                        </div>
+                        <div class="form-group">
+                            <label>Description</label>
+                            <textarea name="description" rows="4"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus"></i>
+                            Add Job
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating Action Button -->
+        <button class="fab" id="addJobBtn" title="Add Job Manually">
+            <i class="fas fa-plus"></i>
+        </button>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
