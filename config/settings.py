@@ -10,7 +10,7 @@ class Config:
     
     # Your profile info
     GITHUB_PROFILE = "https://github.com/macrosensor2022"
-    RESUME_PATH = os.getenv('RESUME_PATH', r"C:\Users\varsv\Downloads\big_resume_modified_datascience_dataanalyt_Dataengineer.docx (10).pdf")
+    RESUME_PATH = os.getenv('RESUME_PATH', r"C:\Users\varsv\Downloads\big_resume_modified_datascience_dataanalyt_Dataengineer.docx (15).pdf")
     
     # Target locations for job search
     TARGET_LOCATIONS = [
