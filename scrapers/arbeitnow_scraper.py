@@ -30,8 +30,11 @@ class ArbeitnowScraper(BaseScraper):
                     title = (job.get('title') or '').lower()
                     desc = (job.get('description') or '').lower()
                     tags = ' '.join(job.get('tags', [])).lower()
+                    full_text = f"{title} {desc} {tags}"
                     
-                    if keyword.lower() not in f"{title} {desc} {tags}":
+                    # Match if ANY word from keyword is found
+                    keyword_words = keyword.lower().split()
+                    if not any(word in full_text for word in keyword_words if len(word) > 2):
                         continue
                 
                 parsed = self.parse_job_listing(job)

@@ -42,14 +42,14 @@ class RemoteOKScraper(BaseScraper):
                 if parsed:
                     # Filter by keyword if provided
                     if keyword:
-                        keyword_lower = keyword.lower()
                         title_lower = parsed['title'].lower()
                         desc_lower = (parsed.get('description') or '').lower()
                         tags = ' '.join(job_data.get('tags', [])).lower()
+                        full_text = f"{title_lower} {desc_lower} {tags}"
                         
-                        if keyword_lower not in title_lower and \
-                           keyword_lower not in desc_lower and \
-                           keyword_lower not in tags:
+                        # Match if ANY word from keyword is found
+                        keyword_words = keyword.lower().split()
+                        if not any(word in full_text for word in keyword_words if len(word) > 2):
                             continue
                     
                     jobs.append(parsed)
