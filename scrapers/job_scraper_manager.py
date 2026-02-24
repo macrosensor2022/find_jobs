@@ -7,9 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scrapers.linkedin_scraper import LinkedInScraper
 from scrapers.remoteok_scraper import RemoteOKScraper
-from scrapers.indeed_scraper import IndeedScraper
 from scrapers.themuse_scraper import TheMuseScraper
 from scrapers.adzuna_scraper import AdzunaScraper
+from scrapers.arbeitnow_scraper import ArbeitnowScraper
+from scrapers.usajobs_scraper import USAJobsScraper
 from scrapers.nuworks_scraper import NUWorksScraper
 from scrapers.profile_matcher import ProfileMatcher
 from backend.models import Job, SearchLog
@@ -27,6 +28,8 @@ class JobScraperManager:
             'remoteok': RemoteOKScraper(),
             'themuse': TheMuseScraper(),
             'adzuna': AdzunaScraper(),
+            'arbeitnow': ArbeitnowScraper(),
+            'usajobs': USAJobsScraper(),
         }
         self.nuworks_scraper = None
     
@@ -45,7 +48,7 @@ class JobScraperManager:
         errors = []
         
         # For API-based scrapers that don't need location iteration
-        api_scrapers = ['remoteok', 'themuse']
+        api_scrapers = ['remoteok', 'themuse', 'arbeitnow', 'usajobs']
         
         if source in api_scrapers:
             # These scrapers fetch all jobs at once or handle location internally
@@ -169,7 +172,7 @@ class JobScraperManager:
         from config.settings import Config
         
         if sources is None:
-            sources = ['remoteok', 'themuse']  # Default to API-based scrapers that work
+            sources = ['remoteok', 'themuse', 'arbeitnow']  # API-based scrapers (no key needed)
         if keywords is None:
             keywords = Config.SEARCH_KEYWORDS[:5]
         if locations is None:
