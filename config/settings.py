@@ -14,14 +14,15 @@ class Config:
     
     # Target locations for job search
     TARGET_LOCATIONS = [
-        "Maine",
-        "New Jersey", 
-        "New York",
-        "Texas",
-        "Colorado",
-        "Utah",
-        "Nevada",
-        "Arizona"
+        # Original
+        "Maine", "New Jersey", "New York", "Texas", "Colorado", "Utah", "Nevada", "Arizona",
+        # Lower competition states
+        "Idaho", "Montana", "Wyoming", "New Mexico", "Kansas", "Nebraska", "Iowa",
+        "Arkansas", "Oklahoma", "Missouri", "Kentucky", "Tennessee", "Alabama",
+        "South Carolina", "North Dakota", "South Dakota", "Wisconsin", "Minnesota",
+        "Indiana", "Ohio", "Michigan", "Pennsylvania", "Vermont", "New Hampshire",
+        # Remote
+        "Remote"
     ]
     
     # Job search keywords based on your profile

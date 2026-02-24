@@ -126,15 +126,23 @@ class ProfileMatcher:
         
         # Target locations
         self.target_locations = [
-            'maine', 'me',
-            'new jersey', 'nj',
-            'new york', 'ny', 'nyc',
+            # Original states
+            'maine', 'me', 'new jersey', 'nj', 'new york', 'ny', 'nyc',
             'texas', 'tx', 'austin', 'dallas', 'houston',
             'colorado', 'co', 'denver', 'boulder',
-            'utah', 'ut', 'salt lake',
-            'nevada', 'nv', 'las vegas', 'reno',
-            'arizona', 'az', 'phoenix', 'tucson',
-            'remote', 'hybrid', 'anywhere'
+            'utah', 'ut', 'salt lake', 'nevada', 'nv', 'arizona', 'az',
+            # Lower competition states
+            'idaho', 'id', 'boise', 'montana', 'mt', 'wyoming', 'wy',
+            'new mexico', 'nm', 'albuquerque', 'kansas', 'ks', 'nebraska', 'ne',
+            'iowa', 'ia', 'arkansas', 'ar', 'oklahoma', 'ok', 'missouri', 'mo',
+            'kentucky', 'ky', 'tennessee', 'tn', 'nashville', 'alabama', 'al',
+            'south carolina', 'sc', 'north dakota', 'nd', 'south dakota', 'sd',
+            'wisconsin', 'wi', 'madison', 'minnesota', 'mn', 'minneapolis',
+            'indiana', 'in', 'indianapolis', 'ohio', 'oh', 'columbus', 'cleveland',
+            'michigan', 'mi', 'detroit', 'ann arbor', 'pennsylvania', 'pa', 'pittsburgh',
+            'vermont', 'vt', 'new hampshire', 'nh',
+            # Remote
+            'remote', 'hybrid', 'anywhere', 'work from home', 'wfh'
         ]
         
         # Maximum possible score for normalization (use a reasonable cap)
