@@ -13,7 +13,7 @@ A modern, full-stack job search aggregator designed for students seeking interns
 ## Features
 
 ### Job Aggregation
-- **Multi-source scraping**: Aggregate jobs from RemoteOK, The Muse, LinkedIn, Adzuna, and NUWorks
+- **Multi-source scraping**: Aggregate jobs from RemoteOK, The Muse, Arbeitnow, LinkedIn, Adzuna, and NUWorks
 - **API-first approach**: Uses official APIs where available for reliable data collection
 - **Profile matching**: Intelligent scoring system that matches jobs to your skills (0-100%)
 - **Duplicate detection**: Automatically prevents duplicate job entries
@@ -247,4 +247,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Built with ❤️ for the Summer 2026 Co-op Search**
+**Built with ❤️ for the Summer 2026 Co-op Search**  
+*Last updated: February 2026*
