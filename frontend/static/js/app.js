@@ -63,7 +63,7 @@ function initNavigation() {
     });
     
     document.getElementById('globalSearch').addEventListener('input', debounce((e) => {
-        state.filters.search = e.target.value;
+        state.filters.search = (e.target.value || '').trim();
         if (state.currentView === 'jobs') {
             loadJobs();
         }

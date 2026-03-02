@@ -11,16 +11,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     from backend.app import app
+    from config.settings import Config
     
+    port = Config.PORT
     print("\n" + "="*60)
     print("  Job Search Dashboard - Summer 2026 Co-op Search")
     print("="*60)
     print("\n  Starting server...")
-    print("  Open http://localhost:8080 in your browser")
+    print(f"  Open http://localhost:{port} in your browser")
     print("\n  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
-    app.run(debug=False, port=8080, host='127.0.0.1', threaded=True)
+    app.run(debug=False, port=port, host='127.0.0.1', threaded=True)
 
 
 if __name__ == '__main__':

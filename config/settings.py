@@ -7,6 +7,7 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///jobs.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    PORT = int(os.getenv('PORT', 8080))
     
     # Your profile info
     GITHUB_PROFILE = "https://github.com/macrosensor2022"
