@@ -22,7 +22,6 @@ class JobScraperManager:
         self.min_match_score = min_match_score
         self.profile_matcher = ProfileMatcher()
         
-        # Indeed RSS no longer works (returns 404)
         self.scrapers = {
             'linkedin': LinkedInScraper(),
             'remoteok': RemoteOKScraper(),
@@ -47,20 +46,18 @@ class JobScraperManager:
         matched_jobs = 0
         errors = []
         
-        # For API-based scrapers that don't need location iteration
         api_scrapers = ['remoteok', 'themuse', 'arbeitnow', 'usajobs']
-        
+
         if source in api_scrapers:
-            # These scrapers fetch all jobs at once or handle location internally
             log = SearchLog(
                 source=source,
                 keyword=','.join(keywords[:3]),
-                location='all',
+                location='USA',
                 status='in_progress'
             )
             self.db_session.add(log)
             self.db_session.commit()
-            
+
             try:
                 all_jobs = []
                 for keyword in keywords:
@@ -172,7 +169,7 @@ class JobScraperManager:
         from config.settings import Config
         
         if sources is None:
-            sources = ['remoteok', 'themuse', 'arbeitnow']  # API-based scrapers (no key needed)
+            sources = ['linkedin', 'remoteok', 'themuse']
         if keywords is None:
             keywords = Config.SEARCH_KEYWORDS[:5]
         if locations is None:

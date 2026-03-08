@@ -232,7 +232,7 @@ def get_search_logs():
 @app.route('/api/scrape/start', methods=['POST'])
 def start_scrape():
     data = request.get_json() or {}
-    sources = data.get('sources', ['remoteok', 'indeed', 'themuse', 'linkedin'])
+    sources = data.get('sources', ['linkedin', 'remoteok', 'themuse'])
     keywords = data.get('keywords', Config.SEARCH_KEYWORDS[:5])
     locations = data.get('locations', Config.TARGET_LOCATIONS)
     min_match_score = data.get('min_match_score', 40)
