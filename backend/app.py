@@ -245,7 +245,9 @@ def start_scrape():
     data = request.get_json() or {}
     sources = data.get('sources', ['linkedin', 'remoteok', 'themuse'])
     keywords = data.get('keywords', Config.SEARCH_KEYWORDS[:5])
-    locations = data.get('locations', Config.TARGET_LOCATIONS)
+    locations = data.get('locations') or Config.TARGET_LOCATIONS
+    if not locations:
+        locations = Config.TARGET_LOCATIONS
     min_match_score = data.get('min_match_score', 40)
     
     from scrapers.job_scraper_manager import JobScraperManager

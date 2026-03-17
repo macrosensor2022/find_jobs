@@ -147,6 +147,14 @@ NUWorks requires Duo 2FA authentication:
 - **Hide**: Remove uninteresting jobs from your feed
 - **Notes**: Add notes about each opportunity
 
+## Testing
+
+With the app running (`python run.py`), you can run a basic end-to-end API test suite:
+
+```bash
+python -m tests.test_platform
+```
+
 ## Project Structure
 
 ```
