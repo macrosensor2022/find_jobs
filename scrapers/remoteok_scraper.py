@@ -47,7 +47,7 @@ US_INDICATORS = [
 
 
 class RemoteOKScraper(BaseScraper):
-    MAX_AGE_DAYS = 14
+    MAX_AGE_DAYS = 3
 
     def __init__(self):
         super().__init__()

@@ -86,9 +86,14 @@ def get_jobs():
             start_date = None
         
         if start_date:
-            query = query.filter(Job.date_scraped >= start_date)
+            query = query.filter(
+                db.or_(
+                    Job.date_posted >= start_date,
+                    db.and_(Job.date_posted == None, Job.date_scraped >= start_date)
+                )
+            )
     
-    query = query.order_by(Job.date_scraped.desc())
+    query = query.order_by(Job.date_posted.desc().nullslast(), Job.date_scraped.desc())
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
@@ -164,7 +169,13 @@ def get_stats():
     favorite_jobs = Job.query.filter(Job.is_favorite == True).count()
     
     today = datetime.utcnow() - timedelta(days=1)
-    new_today = Job.query.filter(Job.date_scraped >= today, Job.is_hidden == False).count()
+    new_today = Job.query.filter(
+        db.or_(
+            Job.date_posted >= today,
+            db.and_(Job.date_posted == None, Job.date_scraped >= today)
+        ),
+        Job.is_hidden == False
+    ).count()
     
     by_source = db.session.query(
         Job.source, db.func.count(Job.id)

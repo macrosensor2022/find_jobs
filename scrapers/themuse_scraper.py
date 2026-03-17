@@ -34,7 +34,7 @@ NON_US_KEYWORDS = [
 
 
 class TheMuseScraper(BaseScraper):
-    MAX_AGE_DAYS = 60
+    MAX_AGE_DAYS = 3
 
     def __init__(self):
         super().__init__()

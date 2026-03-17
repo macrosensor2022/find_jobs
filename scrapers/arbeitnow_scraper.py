@@ -5,7 +5,7 @@ Filtered to USA-based positions only
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 
 
@@ -47,10 +47,22 @@ US_LOCATION_INDICATORS = [
 
 
 class ArbeitnowScraper(BaseScraper):
+    MAX_AGE_DAYS = 3
+
     def __init__(self):
         super().__init__()
         self.source_name = "arbeitnow"
         self.api_url = "https://www.arbeitnow.com/api/job-board-api"
+
+    def _is_recent(self, created_at) -> bool:
+        if not created_at:
+            return False
+        try:
+            posted = datetime.fromtimestamp(created_at, tz=timezone.utc)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=self.MAX_AGE_DAYS)
+            return posted >= cutoff
+        except (ValueError, TypeError, OSError):
+            return False
 
     def _is_usa_job(self, location: str, title: str = '', description: str = '') -> bool:
         """Strict USA filter. Since Arbeitnow is primarily European,
@@ -99,8 +111,13 @@ class ArbeitnowScraper(BaseScraper):
             data = response.json()
             all_jobs = data.get('data', [])
             skipped_non_us = 0
+            skipped_old = 0
 
             for job in all_jobs:
+                if not self._is_recent(job.get('created_at')):
+                    skipped_old += 1
+                    continue
+
                 job_location = job.get('location', '')
                 job_title = job.get('title', '')
                 job_desc = job.get('description', '')
@@ -122,9 +139,9 @@ class ArbeitnowScraper(BaseScraper):
                 if parsed:
                     jobs.append(parsed)
 
-            print(f"Arbeitnow: Found {len(jobs)} USA jobs" +
+            print(f"Arbeitnow: Found {len(jobs)} recent USA jobs" +
                   (f" matching '{keyword}'" if keyword else "") +
-                  f" (skipped {skipped_non_us} non-US)")
+                  f" (skipped {skipped_old} old, {skipped_non_us} non-US)")
 
         except Exception as e:
             print(f"Arbeitnow error: {e}")

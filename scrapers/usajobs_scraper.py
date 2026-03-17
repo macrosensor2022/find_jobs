@@ -5,7 +5,7 @@ All results are guaranteed USA-based
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import time
 import os
 
@@ -26,12 +26,14 @@ class USAJobsScraper(BaseScraper):
         jobs = []
 
         try:
+            date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime('%m/%d/%Y')
             params = {
                 'ResultsPerPage': 50,
                 'Page': page,
                 'SortField': 'DatePosted',
                 'SortDirection': 'Desc',
                 'JobCategoryCode': '2210',
+                'DatePosted': date_from,
             }
 
             if keyword:

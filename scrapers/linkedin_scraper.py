@@ -2,10 +2,11 @@
 LinkedIn Guest Jobs API Scraper
 Scrapes public LinkedIn job listings without authentication
 Targets USA internships/entry-level positions, sorted by date
+Defaults to last 24 hours to surface the freshest postings
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 import re
 
@@ -26,7 +27,7 @@ class LinkedInScraper(BaseScraper):
         params = {
             'keywords': keyword,
             'location': location,
-            'f_TPR': 'r604800',       # Past week
+            'f_TPR': 'r86400',        # Past 24 hours (was r604800 = past week)
             'f_E': '1',               # Entry level
             'f_JT': 'I',              # Internship job type
             'start': start,
@@ -41,18 +42,29 @@ class LinkedInScraper(BaseScraper):
             return jobs
 
         job_cards = soup.find_all('div', class_='base-card')
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        skipped_old = 0
 
         for card in job_cards:
             try:
                 job_data = self.parse_job_listing(card)
-                if job_data:
-                    jobs.append(job_data)
+                if not job_data:
+                    continue
+                dp = job_data.get('date_posted')
+                if dp:
+                    if dp.tzinfo is None:
+                        dp = dp.replace(tzinfo=timezone.utc)
+                    if dp < cutoff:
+                        skipped_old += 1
+                        continue
+                jobs.append(job_data)
             except Exception as e:
                 print(f"Error parsing LinkedIn job: {e}")
                 continue
 
-        if jobs:
-            print(f"LinkedIn: Found {len(jobs)} jobs for '{keyword}' in '{location}'")
+        if jobs or skipped_old:
+            print(f"LinkedIn: Found {len(jobs)} fresh jobs for '{keyword}' in '{location}'"
+                  + (f" (skipped {skipped_old} older than 48h)" if skipped_old else ""))
 
         return jobs
 
