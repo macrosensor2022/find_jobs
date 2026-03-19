@@ -586,10 +586,36 @@ function initScraper() {
             
             statusEl.style.display = 'none';
             resultsEl.style.display = 'block';
+
+            const viewFreshJobs = () => {
+                state.filters.dateFilter = 'today';
+                if (sources.length === 1) {
+                    state.filters.source = sources[0];
+                    const sourceSelect = document.getElementById('sourceFilter');
+                    if (sourceSelect) sourceSelect.value = sources[0];
+                } else {
+                    state.filters.source = '';
+                    const sourceSelect = document.getElementById('sourceFilter');
+                    if (sourceSelect) sourceSelect.value = '';
+                }
+                const dateSelect = document.getElementById('dateFilter');
+                if (dateSelect) dateSelect.value = 'today';
+                switchView('jobs');
+            };
             
             document.getElementById('resultsContent').innerHTML = `
                 <p><strong>Total New Jobs (${minMatchScore}%+ match):</strong> ${result.results.total_new_jobs}</p>
                 <p><strong>Total Matched Jobs:</strong> ${result.results.total_matched_jobs || 0}</p>
+                <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-primary" id="viewFreshJobsBtn">
+                        <i class="fas fa-bolt"></i>
+                        View Fresh Jobs (Last 24 Hours)
+                    </button>
+                    <button class="btn btn-secondary" id="viewAllJobsBtn">
+                        <i class="fas fa-list"></i>
+                        View All Jobs
+                    </button>
+                </div>
                 <div style="margin-top: 12px;">
                     ${Object.entries(result.results.sources || {}).map(([source, data]) => `
                         <div style="padding: 8px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 8px;">
@@ -602,6 +628,18 @@ function initScraper() {
                     `).join('')}
                 </div>
             `;
+
+            document.getElementById('viewFreshJobsBtn')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                viewFreshJobs();
+            });
+            document.getElementById('viewAllJobsBtn')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                state.filters.dateFilter = '';
+                const dateSelect = document.getElementById('dateFilter');
+                if (dateSelect) dateSelect.value = '';
+                switchView('jobs');
+            });
         } catch (error) {
             statusEl.style.display = 'none';
             alert('Error during scraping: ' + error.message);
