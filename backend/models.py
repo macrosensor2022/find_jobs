@@ -1,10 +1,19 @@
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timezone
 
 db = SQLAlchemy()
 
 class Job(db.Model):
     __tablename__ = 'jobs'
+    __table_args__ = (
+        db.Index('idx_job_source', 'source'),
+        db.Index('idx_job_status', 'application_status'),
+        db.Index('idx_job_date_posted', 'date_posted'),
+        db.Index('idx_job_is_hidden', 'is_hidden'),
+        db.Index('idx_job_is_favorite', 'is_favorite'),
+        db.Index('idx_job_is_applied', 'is_applied'),
+        db.Index('idx_job_source_status', 'source', 'application_status'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(255), nullable=False)
@@ -19,7 +28,7 @@ class Job(db.Model):
     job_type = db.Column(db.String(50))  # internship, co-op, full-time
     
     date_posted = db.Column(db.DateTime)
-    date_scraped = db.Column(db.DateTime, default=datetime.utcnow)
+    date_scraped = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     
     is_remote = db.Column(db.Boolean, default=False)
     is_favorite = db.Column(db.Boolean, default=False)
@@ -35,8 +44,8 @@ class Job(db.Model):
     external_id = db.Column(db.String(255))  # External job ID from source
     match_score = db.Column(db.Integer, default=0)  # Profile match score (0-100%)
     
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
         return {
@@ -70,6 +79,11 @@ class Job(db.Model):
 
 class SearchLog(db.Model):
     __tablename__ = 'search_logs'
+    __table_args__ = (
+        db.Index('idx_searchlog_source', 'source'),
+        db.Index('idx_searchlog_status', 'status'),
+        db.Index('idx_searchlog_started', 'started_at'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     source = db.Column(db.String(50))
@@ -78,7 +92,7 @@ class SearchLog(db.Model):
     jobs_found = db.Column(db.Integer, default=0)
     status = db.Column(db.String(50))  # success, failed, in_progress
     error_message = db.Column(db.Text)
-    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = db.Column(db.DateTime)
     
     def to_dict(self):
@@ -97,17 +111,20 @@ class SearchLog(db.Model):
 
 class UserProfile(db.Model):
     __tablename__ = 'user_profile'
+    __table_args__ = (
+        db.Index('idx_userprofile_email', 'email'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), default="Vinay Varshigan")
+    name = db.Column(db.String(255))
     email = db.Column(db.String(255))
-    github_url = db.Column(db.String(500), default="https://github.com/macrosensor2022")
+    github_url = db.Column(db.String(500))
     linkedin_url = db.Column(db.String(500))
     resume_path = db.Column(db.String(500))
-    target_role = db.Column(db.String(255), default="Data Science / ML / Data Engineering Intern")
+    target_role = db.Column(db.String(255))
     
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def to_dict(self):
         return {

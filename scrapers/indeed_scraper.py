@@ -4,7 +4,7 @@ Uses Indeed's RSS feeds for job searches - no authentication required
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime
+from datetime import datetime, timezone
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
@@ -112,7 +112,7 @@ class IndeedScraper(BaseScraper):
                 from email.utils import parsedate_to_datetime
                 date_posted = parsedate_to_datetime(pub_date)
             except:
-                date_posted = datetime.utcnow()
+                date_posted = datetime.now(timezone.utc)
         
         # Check if remote
         is_remote = 'remote' in title.lower() or 'remote' in description.lower()

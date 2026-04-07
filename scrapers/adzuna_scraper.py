@@ -5,7 +5,7 @@ Falls back to basic scraping if no API key
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime
+from datetime import datetime, timezone
 import urllib.parse
 import os
 import time
@@ -104,7 +104,7 @@ class AdzunaScraper(BaseScraper):
             try:
                 date_posted = datetime.fromisoformat(created.replace('Z', '+00:00'))
             except:
-                date_posted = datetime.utcnow()
+                date_posted = datetime.now(timezone.utc)
         
         # Salary
         salary_min = job_data.get('salary_min')

@@ -6,7 +6,7 @@ Defaults to last 24 hours to surface the freshest postings
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta, timezone
 import urllib.parse
 import re
 
@@ -95,7 +95,7 @@ class LinkedInScraper(BaseScraper):
                     else:
                         date_posted = self.parse_relative_date(date_str)
             except (ValueError, TypeError):
-                date_posted = datetime.utcnow()
+                date_posted = datetime.now(timezone.utc)
 
         external_id = ''
         if job_url:
