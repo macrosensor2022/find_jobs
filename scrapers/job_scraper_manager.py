@@ -11,9 +11,7 @@ logger = logging.getLogger(__name__)
 from scrapers.linkedin_scraper import LinkedInScraper
 from scrapers.remoteok_scraper import RemoteOKScraper
 from scrapers.themuse_scraper import TheMuseScraper
-from scrapers.adzuna_scraper import AdzunaScraper
 from scrapers.arbeitnow_scraper import ArbeitnowScraper
-from scrapers.usajobs_scraper import USAJobsScraper
 from scrapers.nuworks_scraper import NUWorksScraper
 from scrapers.profile_matcher import ProfileMatcher
 from backend.models import Job, SearchLog
@@ -25,13 +23,12 @@ class JobScraperManager:
         self.min_match_score = min_match_score
         self.profile_matcher = ProfileMatcher()
         
+        # Working scrapers (no API key required)
         self.scrapers = {
             'linkedin': LinkedInScraper(),
             'remoteok': RemoteOKScraper(),
             'themuse': TheMuseScraper(),
-            'adzuna': AdzunaScraper(),
             'arbeitnow': ArbeitnowScraper(),
-            'usajobs': USAJobsScraper(),
         }
         self.nuworks_scraper = None
     
