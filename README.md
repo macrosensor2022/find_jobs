@@ -256,4 +256,33 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ for the Summer 2026 Co-op Search**  
-*Last updated: February 2026*
+*Last updated: April 2026*
+
+## Recent Updates (April 2026)
+
+### Security & Code Quality
+- Removed hardcoded secrets - all sensitive values now use environment variables
+- Added input validation for all API endpoints
+- Fixed deprecated SQLAlchemy methods
+- Updated datetime handling to use timezone-aware timestamps
+- Added database indexes for improved query performance
+- Replaced print statements with proper logging
+
+### Configuration
+- Profile matching skills now configurable via environment variables
+- Server listens on 0.0.0.0 for external access
+- Added retry mechanism with exponential backoff for scrapers
+
+### Environment Variables
+
+```env
+# User Profile
+DEFAULT_NAME=Job Seeker
+DEFAULT_GITHUB_URL=
+DEFAULT_TARGET_ROLE=Software Engineer
+
+# Profile Matcher (optional overrides)
+PROFILE_MATCHER_SKILLS='{"python": 15, "java": 10}'
+PROFILE_MATCHER_NEGATIVE_KEYWORDS='{"senior": -8}'
+PROFILE_MATCHER_MAX_SCORE=150
+```
