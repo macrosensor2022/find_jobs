@@ -155,6 +155,14 @@ With the app running (`python run.py`), you can run a basic end-to-end API test 
 python -m tests.test_platform
 ```
 
+## Recent Updates
+
+- **Fresher job results**: date windows were tightened across scrapers to prioritize recent postings.
+- **Better freshness sorting**: job listing order now prioritizes `date_posted` (when available) over just scrape time.
+- **Scraper UX improvement**: after scraping, you can jump directly to **View Fresh Jobs (Last 24 Hours)** from the UI.
+- **Safer scrape defaults**: if the frontend sends empty locations, the backend now falls back to configured default locations.
+- **Platform test coverage**: added end-to-end API/scrape flow checks in `tests/test_platform.py`.
+
 ## Project Structure
 
 ```
@@ -256,4 +264,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ for the Summer 2026 Co-op Search**  
-*Last updated: February 2026*
+*Last updated: April 2026*
