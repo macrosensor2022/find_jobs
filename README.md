@@ -265,3 +265,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Built with ❤️ for the Summer 2026 Co-op Search**  
 *Last updated: April 2026*
+
+### Additional April 2026 updates
+- Removed hardcoded secrets; sensitive values now use environment variables.
+- Added input validation for API endpoints.
+- Updated datetime handling to use timezone-aware timestamps.
+- Added database indexes for query performance.
+- Replaced print statements with structured logging.
+- Added retry mechanism with exponential backoff for scrapers.
+- Profile matcher skills can be overridden with environment variables.
+- Server can listen on `0.0.0.0` for external access.

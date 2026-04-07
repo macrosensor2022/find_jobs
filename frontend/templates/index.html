@@ -158,24 +158,42 @@
                     <div class="filter-group">
                         <select id="sourceFilter" class="filter-select">
                             <option value="">All Sources</option>
-                            <option value="linkedin">LinkedIn</option>
-                            <option value="remoteok">RemoteOK</option>
-                            <option value="themuse">The Muse</option>
-                            <option value="arbeitnow">Arbeitnow</option>
-                            <option value="adzuna">Adzuna</option>
-                            <option value="nuworks">NUWorks</option>
-                            <option value="usajobs">USAJobs</option>
+                            <option value="linkedin">LinkedIn ✅</option>
+                            <option value="remoteok">RemoteOK ✅</option>
+                            <option value="themuse">The Muse ✅</option>
+                            <option value="remotive">Remotive ✅</option>
+                            <option value="arbeitnow">Arbeitnow ✅</option>
+                            <option value="nuworks">NUWorks (Northeastern)</option>
                         </select>
                         <select id="locationFilter" class="filter-select">
                             <option value="">All Locations</option>
-                            <option value="Maine">Maine</option>
-                            <option value="New Jersey">New Jersey</option>
-                            <option value="New York">New York</option>
+                            <!-- Low Competition (Easiest) -->
+                            <option value="Utah">Utah ⭐ (Low Competition)</option>
+                            <option value="Wisconsin">Wisconsin ⭐ (Low Competition)</option>
+                            <option value="Maine">Maine ⭐ (Low Competition)</option>
+                            <option value="Florida">Florida ⭐ (Low Competition)</option>
+                            <!-- Medium Competition -->
                             <option value="Texas">Texas</option>
                             <option value="Colorado">Colorado</option>
-                            <option value="Utah">Utah</option>
-                            <option value="Nevada">Nevada</option>
                             <option value="Arizona">Arizona</option>
+                            <option value="Nevada">Nevada</option>
+                            <option value="New Jersey">New Jersey</option>
+                            <option value="California">California</option>
+                            <!-- Higher Competition -->
+                            <option value="New York">New York</option>
+                            <option value="Remote">Remote (All Locations)</option>
+                            <!-- Additional States -->
+                            <option value="Washington">Washington</option>
+                            <option value="Oregon">Oregon</option>
+                            <option value="Illinois">Illinois</option>
+                            <option value="Michigan">Michigan</option>
+                            <option value="Ohio">Ohio</option>
+                            <option value="Georgia">Georgia</option>
+                            <option value="North Carolina">North Carolina</option>
+                            <option value="Virginia">Virginia</option>
+                            <option value="Massachusetts">Massachusetts</option>
+                            <option value="Connecticut">Connecticut</option>
+                            <option value="Pennsylvania">Pennsylvania</option>
                         </select>
                         <select id="dateFilter" class="filter-select">
                             <option value="">All Time</option>
@@ -239,31 +257,41 @@
                         <div class="card-body">
                             <div class="scraper-form">
                                 <div class="form-group">
-                                    <label>Sources (USA internships only)</label>
+                                    <label>🎯 Active Sources (Working APIs)</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="linkedin" checked>
-                                            <span>LinkedIn (USA, past week)</span>
+                                            <span>LinkedIn ✅ (USA jobs)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="remoteok" checked>
-                                            <span>RemoteOK (Remote/USA, last 14 days)</span>
+                                            <span>RemoteOK ✅ (Remote/USA)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="themuse" checked>
-                                            <span>The Muse (USA internships)</span>
+                                            <span>The Muse ✅ (USA internships)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="remotive" checked>
+                                            <span>Remotive ✅ (Remote/USA)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="arbeitnow">
-                                            <span>Arbeitnow (mostly EU - limited US)</span>
+                                            <span>Arbeitnow (mostly EU)</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="source" value="usajobs">
-                                            <span>USAJobs (needs API key)</span>
+                                            <input type="checkbox" name="source" value="nuworks" checked>
+                                            <span>NUWorks ✅ (Northeastern - needs login)</span>
                                         </label>
-                                        <label class="checkbox-label">
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>🔐 Requires API Key (Optional)</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label" style="opacity: 0.6;">
                                             <input type="checkbox" name="source" value="adzuna">
-                                            <span>Adzuna (needs API key)</span>
+                                            <span>Adzuna (needs free API key)</span>
                                         </label>
                                     </div>
                                 </div>
@@ -352,45 +380,107 @@
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>Locations - Original</label>
+                                    <label>🎯 Low Competition States (Recommended!)</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Utah" checked>
+                                            <span>Utah ⭐ (Easiest!)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Wisconsin" checked>
+                                            <span>Wisconsin ⭐ (Easy!)</span>
+                                        </label>
+                                        <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Maine" checked>
-                                            <span>Maine</span>
+                                            <span>Maine ⭐ (Easy!)</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="New Jersey" checked>
-                                            <span>New Jersey</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="New York" checked>
-                                            <span>New York</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Texas">
-                                            <span>Texas</span>
+                                            <input type="checkbox" name="location" value="Florida" checked>
+                                            <span>Florida ⭐ (Easy!)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Colorado">
-                                            <span>Colorado</span>
+                                            <span>Colorado (Medium)</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Remote" checked>
-                                            <span>Remote</span>
+                                            <input type="checkbox" name="location" value="Arizona">
+                                            <span>Arizona (Medium)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Nevada">
+                                            <span>Nevada (Medium)</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>Locations - Lower Competition States</label>
+                                    <label>🏙️ High Opportunity States</label>
                                     <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Texas" checked>
+                                            <span>Texas (Tech Hub!)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="California" checked>
+                                            <span>California</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="New Jersey" checked>
+                                            <span>New Jersey (Pharma ML!)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="New York" checked>
+                                            <span>New York (High Comp)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Remote" checked>
+                                            <span>Remote (All States!)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>➕ Additional States</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Washington">
+                                            <span>Washington</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Oregon">
+                                            <span>Oregon</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Illinois">
+                                            <span>Illinois</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Michigan">
+                                            <span>Michigan</span>
+                                        </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Ohio">
                                             <span>Ohio</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Michigan">
-                                            <span>Michigan</span>
+                                            <input type="checkbox" name="location" value="Georgia">
+                                            <span>Georgia</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="North Carolina">
+                                            <span>North Carolina</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Virginia">
+                                            <span>Virginia</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Massachusetts">
+                                            <span>Massachusetts</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Connecticut">
+                                            <span>Connecticut</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Pennsylvania">
@@ -399,10 +489,6 @@
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Minnesota">
                                             <span>Minnesota</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Wisconsin">
-                                            <span>Wisconsin</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Indiana">
@@ -431,6 +517,18 @@
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Idaho">
                                             <span>Idaho</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="South Carolina">
+                                            <span>South Carolina</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Louisiana">
+                                            <span>Louisiana</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Oklahoma">
+                                            <span>Oklahoma</span>
                                         </label>
                                     </div>
                                 </div>

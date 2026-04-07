@@ -22,7 +22,7 @@ def main():
     print("\n  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
-    app.run(debug=False, port=port, host='127.0.0.1', threaded=True)
+    app.run(debug=False, port=port, host='0.0.0.0', threaded=True)
 
 
 if __name__ == '__main__':

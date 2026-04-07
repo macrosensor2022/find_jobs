@@ -1,5 +1,5 @@
 from .base_scraper import BaseScraper
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import time
 import threading
@@ -314,7 +314,7 @@ class NUWorksScraper(BaseScraper):
             date_text = date_elem.text.strip()
             date_posted = self.parse_relative_date(date_text)
         except:
-            date_posted = datetime.utcnow()
+            date_posted = datetime.now(timezone.utc)
         
         if not title and not company:
             try:

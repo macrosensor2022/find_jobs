@@ -1,17 +1,19 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict
 import sys
 import os
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = logging.getLogger(__name__)
 
 from scrapers.linkedin_scraper import LinkedInScraper
 from scrapers.remoteok_scraper import RemoteOKScraper
 from scrapers.themuse_scraper import TheMuseScraper
-from scrapers.adzuna_scraper import AdzunaScraper
 from scrapers.arbeitnow_scraper import ArbeitnowScraper
-from scrapers.usajobs_scraper import USAJobsScraper
 from scrapers.nuworks_scraper import NUWorksScraper
+from scrapers.remotive_scraper import RemotiveScraper
 from scrapers.profile_matcher import ProfileMatcher
 from backend.models import Job, SearchLog
 
@@ -22,13 +24,13 @@ class JobScraperManager:
         self.min_match_score = min_match_score
         self.profile_matcher = ProfileMatcher()
         
+        # Working scrapers (no API key required)
         self.scrapers = {
             'linkedin': LinkedInScraper(),
             'remoteok': RemoteOKScraper(),
             'themuse': TheMuseScraper(),
-            'adzuna': AdzunaScraper(),
             'arbeitnow': ArbeitnowScraper(),
-            'usajobs': USAJobsScraper(),
+            'remotive': RemotiveScraper(),
         }
         self.nuworks_scraper = None
     
@@ -84,12 +86,12 @@ class JobScraperManager:
                 
                 log.jobs_found = len(all_jobs)
                 log.status = 'success'
-                log.completed_at = datetime.utcnow()
+                log.completed_at = datetime.now(timezone.utc)
                 
             except Exception as e:
                 log.status = 'failed'
                 log.error_message = str(e)
-                log.completed_at = datetime.utcnow()
+                log.completed_at = datetime.now(timezone.utc)
                 errors.append(str(e))
             
             self.db_session.commit()
@@ -129,12 +131,12 @@ class JobScraperManager:
                         
                         log.jobs_found = len(jobs)
                         log.status = 'success'
-                        log.completed_at = datetime.utcnow()
+                        log.completed_at = datetime.now(timezone.utc)
                         
                     except Exception as e:
                         log.status = 'failed'
                         log.error_message = str(e)
-                        log.completed_at = datetime.utcnow()
+                        log.completed_at = datetime.now(timezone.utc)
                         errors.append(f"{keyword}@{location}: {str(e)}")
                     
                     self.db_session.commit()
@@ -176,7 +178,7 @@ class JobScraperManager:
             locations = Config.TARGET_LOCATIONS
         
         results = {
-            'started_at': datetime.utcnow().isoformat(),
+            'started_at': datetime.now(timezone.utc).isoformat(),
             'sources': {},
             'total_new_jobs': 0,
             'total_matched_jobs': 0,
@@ -203,7 +205,7 @@ class JobScraperManager:
             results['total_new_jobs'] += result.get('new_jobs', 0)
             results['total_matched_jobs'] += result.get('matched_jobs', 0)
         
-        results['completed_at'] = datetime.utcnow().isoformat()
+        results['completed_at'] = datetime.now(timezone.utc).isoformat()
         
         return results
     

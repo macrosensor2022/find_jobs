@@ -5,126 +5,22 @@ Calculates match score between job postings and user profile
 
 import re
 import html
+import logging
 from typing import Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileMatcher:
     def __init__(self):
-        # Your skills and keywords from your GitHub profile
-        self.skills = {
-            # Programming Languages (weight: high)
-            'python': 15,
-            'java': 10,
-            'sql': 10,
-            'r': 6,
-            
-            # Data Science & ML (weight: very high)
-            'machine learning': 15,
-            'deep learning': 12,
-            'data science': 15,
-            'data analyst': 12,
-            'data analysis': 12,
-            'data engineering': 12,
-            'data engineer': 12,
-            'nlp': 15,
-            'natural language processing': 15,
-            'neural network': 10,
-            'transformer': 12,
-            'bert': 12,
-            'pytorch': 12,
-            'tensorflow': 12,
-            'scikit-learn': 10,
-            'sklearn': 10,
-            'pandas': 10,
-            'numpy': 8,
-            'matplotlib': 6,
-            'seaborn': 6,
-            
-            # AI/ML specific
-            'ai': 12,
-            'artificial intelligence': 12,
-            'computer vision': 10,
-            'cnn': 10,
-            'resnet': 8,
-            'sentiment analysis': 10,
-            'text classification': 10,
-            'recommendation system': 10,
-            'llm': 12,
-            'gpt': 10,
-            'langchain': 10,
-            
-            # Data Engineering
-            'etl': 10,
-            'data pipeline': 10,
-            'spark': 8,
-            'hadoop': 6,
-            'airflow': 8,
-            'kafka': 8,
-            'snowflake': 8,
-            'dbt': 8,
-            
-            # Cloud & DevOps
-            'aws': 10,
-            'ec2': 8,
-            'docker': 8,
-            's3': 6,
-            'cloud': 8,
-            'azure': 8,
-            'gcp': 8,
-            
-            # Databases
-            'mysql': 8,
-            'postgresql': 8,
-            'mongodb': 6,
-            'database': 6,
-            'redis': 6,
-            
-            # Tools
-            'git': 5,
-            'power bi': 8,
-            'tableau': 8,
-            'jupyter': 5,
-            'excel': 5,
-            
-            # Soft skills / Role types - high weight for internships
-            'intern': 20,
-            'internship': 20,
-            'co-op': 25,
-            'entry level': 15,
-            'entry-level': 15,
-            'junior': 12,
-            'graduate': 10,
-            'new grad': 12,
-            'masters': 8,
-            'university': 8,
-            
-            # Your specific experience
-            'fasttext': 8,
-            'log classification': 6,
-            'iot': 6,
-            'rest api': 6,
-            'analytics': 10,
-            'statistics': 8,
-            'visualization': 8,
-        }
+        from config.settings import Config
         
-        # Negative keywords (reduce score) - reduced penalties
-        self.negative_keywords = {
-            'senior': -8,
-            'sr.': -8,
-            'staff': -8,
-            'principal': -10,
-            'lead': -5,
-            'manager': -6,
-            '5+ years': -10,
-            '7+ years': -15,
-            '10+ years': -20,
-            'director': -12,
-            'vp': -12,
-            'phd required': -8,
-        }
+        # Load skills from configuration (can be overridden via environment)
+        self.skills = Config.PROFILE_MATCHER_SKILLS
+        self.negative_keywords = Config.PROFILE_MATCHER_NEGATIVE_KEYWORDS
+        self.max_score = Config.PROFILE_MATCHER_MAX_SCORE
         
-        # Target locations
+        # Target locations - also configurable via settings if needed
         self.target_locations = [
             # Original states
             'maine', 'me', 'new jersey', 'nj', 'new york', 'ny', 'nyc',
@@ -145,8 +41,7 @@ class ProfileMatcher:
             'remote', 'hybrid', 'anywhere', 'work from home', 'wfh'
         ]
         
-        # Maximum possible score for normalization (use a reasonable cap)
-        self.max_score = 150  # Adjusted for realistic scoring
+        logger.debug(f"ProfileMatcher initialized with {len(self.skills)} skills")
     
     def _clean_html(self, text: str) -> str:
         """Remove HTML tags and decode entities"""

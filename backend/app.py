@@ -4,9 +4,73 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from backend.models import db, Job, SearchLog, UserProfile
 from config.settings import Config
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def validate_job_data(data: dict, partial: bool = False) -> tuple:
+    """Validate job data fields. Returns (is_valid, error_message)"""
+    if not data:
+        return False, "No data provided"
+    
+    # Required fields for new jobs
+    required_fields = ['title', 'company']
+    if not partial:
+        for field in required_fields:
+            if not data.get(field):
+                return False, f"Missing required field: {field}"
+    
+    # Validate string lengths
+    if data.get('title') and len(data['title']) > 255:
+        return False, "Title too long (max 255 characters)"
+    if data.get('company') and len(data['company']) > 255:
+        return False, "Company name too long (max 255 characters)"
+    if data.get('location') and len(data['location']) > 255:
+        return False, "Location too long (max 255 characters)"
+    if data.get('job_url') and len(data['job_url']) > 500:
+        return False, "Job URL too long (max 500 characters)"
+    
+    # Validate application_status if provided
+    valid_statuses = ['not_applied', 'applied', 'interviewing', 'offer', 'rejected', 'withdrawn']
+    if data.get('application_status') and data['application_status'] not in valid_statuses:
+        return False, f"Invalid application_status. Must be one of: {', '.join(valid_statuses)}"
+    
+    return True, None
+
+
+def validate_profile_data(data: dict) -> tuple:
+    """Validate profile data fields. Returns (is_valid, error_message)"""
+    if not data:
+        return False, "No data provided"
+    
+    # Validate email format if provided
+    if data.get('email'):
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, data['email']):
+            return False, "Invalid email format"
+    
+    # Validate URL formats if provided
+    url_fields = ['github_url', 'linkedin_url', 'resume_path']
+    for field in url_fields:
+        if data.get(field) and len(data[field]) > 500:
+            return False, f"{field} too long (max 500 characters)"
+    
+    # Validate name length
+    if data.get('name') and len(data['name']) > 255:
+        return False, "Name too long (max 255 characters)"
+    
+    # Validate target_role length
+    if data.get('target_role') and len(data['target_role']) > 255:
+        return False, "Target role too long (max 255 characters)"
+    
+    return True, None
 
 app = Flask(__name__, 
             static_folder='../frontend/static',
@@ -20,13 +84,14 @@ with app.app_context():
     db.create_all()
     if not UserProfile.query.first():
         default_profile = UserProfile(
-            name="Vinay Varshigan",
-            github_url="https://github.com/macrosensor2022",
+            name=Config.DEFAULT_NAME,
+            github_url=Config.DEFAULT_GITHUB_URL,
             resume_path=Config.RESUME_PATH,
-            target_role="Data Science / ML / Data Engineering Intern"
+            target_role=Config.DEFAULT_TARGET_ROLE
         )
         db.session.add(default_profile)
         db.session.commit()
+        logger.info("Created default user profile")
 
 
 @app.route('/')
@@ -75,7 +140,7 @@ def get_jobs():
         )
     
     if date_filter:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if date_filter == 'today':
             start_date = now - timedelta(days=1)
         elif date_filter == 'week':
@@ -109,14 +174,20 @@ def get_jobs():
 
 @app.route('/api/jobs/<int:job_id>', methods=['GET'])
 def get_job(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
     return jsonify(job.to_dict())
 
 
 @app.route('/api/jobs/<int:job_id>', methods=['PUT'])
 def update_job(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
     data = request.get_json()
+    
+    # Validate input (partial=True since we allow updating individual fields)
+    is_valid, error_msg = validate_job_data(data, partial=True)
+    if not is_valid:
+        logger.warning(f"Job update validation failed: {error_msg}")
+        return jsonify({'error': error_msg}), 400
     
     if 'is_favorite' in data:
         job.is_favorite = data['is_favorite']
@@ -125,7 +196,7 @@ def update_job(job_id):
     if 'application_status' in data:
         job.application_status = data['application_status']
         if data['application_status'] == 'applied' and not job.applied_date:
-            job.applied_date = datetime.utcnow()
+            job.applied_date = datetime.now(timezone.utc)
             job.is_applied = True
     if 'notes' in data:
         job.notes = data['notes']
@@ -136,15 +207,22 @@ def update_job(job_id):
 
 @app.route('/api/jobs/<int:job_id>', methods=['DELETE'])
 def delete_job(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
     db.session.delete(job)
     db.session.commit()
+    logger.info(f"Deleted job {job_id}")
     return jsonify({'message': 'Job deleted successfully'})
 
 
 @app.route('/api/jobs/add', methods=['POST'])
 def add_job():
     data = request.get_json()
+    
+    # Validate input
+    is_valid, error_msg = validate_job_data(data, partial=False)
+    if not is_valid:
+        logger.warning(f"Job validation failed: {error_msg}")
+        return jsonify({'error': error_msg}), 400
     
     job = Job(
         title=data.get('title'),
@@ -168,7 +246,7 @@ def get_stats():
     applied_jobs = Job.query.filter(Job.is_applied == True).count()
     favorite_jobs = Job.query.filter(Job.is_favorite == True).count()
     
-    today = datetime.utcnow() - timedelta(days=1)
+    today = datetime.now(timezone.utc) - timedelta(days=1)
     new_today = Job.query.filter(
         db.or_(
             Job.date_posted >= today,
@@ -189,6 +267,11 @@ def get_stats():
         Job.location, db.func.count(Job.id)
     ).filter(Job.is_hidden == False).group_by(Job.location).order_by(db.func.count(Job.id).desc()).limit(10).all()
     
+    # Handle None values in location
+    by_location_dict = {}
+    for loc, count in by_location:
+        by_location_dict[loc if loc else "Unknown"] = count
+    
     return jsonify({
         'total_jobs': total_jobs,
         'applied_jobs': applied_jobs,
@@ -196,7 +279,7 @@ def get_stats():
         'new_today': new_today,
         'by_source': dict(by_source),
         'by_status': dict(by_status),
-        'by_location': dict(by_location)
+        'by_location': by_location_dict
     })
 
 
@@ -216,6 +299,12 @@ def update_profile():
         db.session.add(profile)
     
     data = request.get_json()
+    
+    # Validate input
+    is_valid, error_msg = validate_profile_data(data)
+    if not is_valid:
+        logger.warning(f"Profile validation failed: {error_msg}")
+        return jsonify({'error': error_msg}), 400
     
     if 'name' in data:
         profile.name = data['name']
