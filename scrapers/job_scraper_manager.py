@@ -13,6 +13,7 @@ from scrapers.remoteok_scraper import RemoteOKScraper
 from scrapers.themuse_scraper import TheMuseScraper
 from scrapers.arbeitnow_scraper import ArbeitnowScraper
 from scrapers.nuworks_scraper import NUWorksScraper
+from scrapers.remotive_scraper import RemotiveScraper
 from scrapers.profile_matcher import ProfileMatcher
 from backend.models import Job, SearchLog
 
@@ -29,6 +30,7 @@ class JobScraperManager:
             'remoteok': RemoteOKScraper(),
             'themuse': TheMuseScraper(),
             'arbeitnow': ArbeitnowScraper(),
+            'remotive': RemotiveScraper(),
         }
         self.nuworks_scraper = None
     
