@@ -121,7 +121,7 @@ async function loadDashboard() {
         document.getElementById('totalJobs').textContent = stats.total_jobs || 0;
         document.getElementById('newToday').textContent = stats.new_today || 0;
         document.getElementById('favoriteJobs').textContent = stats.favorite_jobs || 0;
-        document.getElementById('appliedJobs').textContent = stats.applied_jobs || 0;
+        document.getElementById('appliedJobs').textContent = `${stats.applied_jobs || 0} (${stats.response_rate || 0}%)`;
         
         renderSourceChart(stats.by_source || {});
         renderStatusChart(stats.by_status || {});
@@ -606,6 +606,7 @@ function initScraper() {
             document.getElementById('resultsContent').innerHTML = `
                 <p><strong>Total New Jobs (${minMatchScore}%+ match):</strong> ${result.results.total_new_jobs}</p>
                 <p><strong>Total Matched Jobs:</strong> ${result.results.total_matched_jobs || 0}</p>
+                <p><strong>Match Output Rate:</strong> ${calculateOutputRate(result.results)}%</p>
                 <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
                     <button class="btn btn-primary" id="viewFreshJobsBtn">
                         <i class="fas fa-bolt"></i>
@@ -740,6 +741,14 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function calculateOutputRate(results) {
+    const sourceData = Object.values(results.sources || {});
+    const totalFound = sourceData.reduce((sum, source) => sum + (source.total_found || 0), 0);
+    if (!totalFound) return 0;
+    const matched = results.total_matched_jobs || 0;
+    return ((matched / totalFound) * 100).toFixed(2);
 }
 
 function debounce(func, wait) {

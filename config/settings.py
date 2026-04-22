@@ -35,13 +35,21 @@ class Config:
     SEARCH_KEYWORDS = [
         # Data roles
         "Data Science Intern",
+        "Data Science Summer Intern",
+        "Data Science Fall Intern",
         "Data Analyst Intern",
+        "Data Analyst Summer Intern",
+        "Data Analyst Fall Intern",
         "Data Engineer Intern",
+        "Data Engineer Summer Intern",
+        "Data Engineer Fall Intern",
         "Data Science Co-op",
         "Data Analyst Co-op",
         "Data Engineer Co-op",
         # AI/ML roles
         "Machine Learning Intern",
+        "Machine Learning Summer Intern",
+        "Machine Learning Fall Intern",
         "AI Engineer Intern",
         "NLP Engineer Intern",
         "ML Engineer Intern",
@@ -50,6 +58,8 @@ class Config:
         # SDE roles with AI focus
         "Software Engineer Intern AI",
         "Software Development Engineer Intern",
+        "Software Engineer Summer Intern",
+        "Software Engineer Fall Intern",
         "SDE Intern",
         "Software Engineer Intern Machine Learning",
         "Software Engineer Intern",

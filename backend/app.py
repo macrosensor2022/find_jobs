@@ -243,8 +243,9 @@ def add_job():
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     total_jobs = Job.query.filter(Job.is_hidden == False).count()
-    applied_jobs = Job.query.filter(Job.is_applied == True).count()
-    favorite_jobs = Job.query.filter(Job.is_favorite == True).count()
+    applied_jobs = Job.query.filter(Job.is_applied == True, Job.is_hidden == False).count()
+    favorite_jobs = Job.query.filter(Job.is_favorite == True, Job.is_hidden == False).count()
+    response_rate = round((applied_jobs / total_jobs) * 100, 2) if total_jobs else 0
     
     today = datetime.now(timezone.utc) - timedelta(days=1)
     new_today = Job.query.filter(
@@ -261,7 +262,7 @@ def get_stats():
     
     by_status = db.session.query(
         Job.application_status, db.func.count(Job.id)
-    ).group_by(Job.application_status).all()
+    ).filter(Job.is_hidden == False).group_by(Job.application_status).all()
     
     by_location = db.session.query(
         Job.location, db.func.count(Job.id)
@@ -276,6 +277,7 @@ def get_stats():
         'total_jobs': total_jobs,
         'applied_jobs': applied_jobs,
         'favorite_jobs': favorite_jobs,
+        'response_rate': response_rate,
         'new_today': new_today,
         'by_source': dict(by_source),
         'by_status': dict(by_status),
