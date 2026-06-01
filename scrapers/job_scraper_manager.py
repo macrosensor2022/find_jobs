@@ -52,6 +52,8 @@ class JobScraperManager:
         compact_location = normalized_location.replace(' ', '')
 
         location_aliases = {
+            'united states': ['united states', 'usa', 'u.s.', 'u.s.a', 'us'],
+            'usa': ['united states', 'usa', 'u.s.', 'u.s.a', 'us'],
             'maine': ['maine', 'me', 'portland me', 'portland maine'],
             'new york': ['new york', 'ny', 'nyc'],
             'new jersey': ['new jersey', 'nj'],
@@ -67,7 +69,7 @@ class JobScraperManager:
             'michigan': ['michigan', 'mi'],
             'ohio': ['ohio', 'oh'],
             'florida': ['florida', 'fl'],
-            'remote': ['remote', 'anywhere', 'work from home', 'wfh'],
+            'remote': ['remote', 'anywhere', 'worldwide', 'global', 'work from home', 'wfh'],
         }
 
         for location in locations:

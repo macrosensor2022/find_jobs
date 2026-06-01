@@ -22,6 +22,7 @@ class Config:
     
     # Target locations (§4.1 — primary + broad US + remote)
     TARGET_LOCATIONS = [
+        "United States", "USA",
         "Boston", "Massachusetts",
         "Portland", "Maine",
         "New York", "New Jersey",

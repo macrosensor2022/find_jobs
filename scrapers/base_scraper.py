@@ -16,27 +16,59 @@ def _build_ssl_context():
     """
     Build an SSL context that works across environments.
 
-    On Windows, corporate proxies and SSL inspectors often install certs into
-    the system trust store that certifi's bundle does not contain. This makes
-    requests fail with SSLCertVerificationError when using only certifi.
+    Strategy (try in order, first success wins):
+    1. `truststore` — uses the OS native trust store. Can trigger
+       RecursionError on some Windows / Python 3.13 configurations.
+    2. `certifi` — vendored Mozilla CA bundle.
+    3. Disable verification — last resort when the system trust store
+       has certs Python's strict validation rejects (e.g. BasicConstraints
+       not marked critical). Logs a warning.
 
-    Strategy:
-    1. Try `truststore` (uses the OS native trust store on Windows/macOS).
-    2. Fall back to certifi's bundle.
-
-    Returns a verification target suitable for `requests.Session.verify`
-    (either True after truststore injection, or a path to a CA bundle).
+    Returns a value for `requests.Session.verify`.
     """
+    _ts = None
+    # --- attempt 1: truststore ---
     try:
-        import truststore
-        truststore.inject_into_ssl()
-        logger.info("Using OS native trust store (truststore) for SSL verification")
+        import truststore as _ts
+        _ts.inject_into_ssl()
+        requests.head('https://www.google.com', timeout=10)
+        logger.info("SSL: using OS native trust store (truststore)")
         return True
     except ImportError:
-        logger.debug("truststore not available, falling back to certifi")
+        logger.debug("truststore not installed")
+    except RecursionError:
+        logger.warning("truststore caused RecursionError, reverting")
+        if _ts:
+            try:
+                _ts.extract_from_ssl()
+            except Exception:
+                pass
     except Exception as e:
-        logger.warning(f"Failed to initialize truststore ({e}), falling back to certifi")
-    return certifi.where()
+        logger.warning(f"truststore failed ({e}), reverting")
+        if _ts:
+            try:
+                _ts.extract_from_ssl()
+            except Exception:
+                pass
+
+    # --- attempt 2: certifi bundle (test against a real scraper target) ---
+    try:
+        ca_path = certifi.where()
+        requests.head('https://remoteok.com', verify=ca_path, timeout=10)
+        logger.info("SSL: using certifi CA bundle")
+        return ca_path
+    except Exception as e:
+        logger.warning(f"certifi verification also failed ({e})")
+
+    # --- attempt 3: no verification (local-dev fallback) ---
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    logger.warning(
+        "SSL: certificate verification disabled — all HTTPS requests "
+        "will be unverified. This is safe for local development but "
+        "should not be used in production."
+    )
+    return False
 
 
 _SSL_VERIFY = _build_ssl_context()
