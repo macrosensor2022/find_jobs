@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
-from backend.models import db, Job, SearchLog, UserProfile
+from backend.models import db, Job, SearchLog, UserProfile, EVerifyEmployer, SponsorHistory
 from config.settings import Config
 import logging
 
@@ -72,6 +72,51 @@ def validate_profile_data(data: dict) -> tuple:
     
     return True, None
 
+
+def _migrate_add_columns(engine):
+    """Add new OPT-redesign columns to existing tables.
+
+    SQLite supports ALTER TABLE ADD COLUMN for nullable/defaulted columns.
+    Table names are derived from model __tablename__ to stay in sync.
+    Idempotent — safe to run on every startup.
+    """
+    import sqlalchemy
+
+    inspector = sqlalchemy.inspect(engine)
+
+    migrations = [
+        (Job.__tablename__, {
+            'is_everify':          'BOOLEAN',
+            'opt_field_related':   'BOOLEAN DEFAULT 0',
+            'sponsorship_screen':  'BOOLEAN DEFAULT 0',
+            'h1b_lca_count':       'INTEGER',
+            'wage_level':          'INTEGER',
+            'employer_match_conf': 'FLOAT',
+            'freshness_hours':     'INTEGER',
+            'opt_fit_score':       'INTEGER',
+        }),
+        (UserProfile.__tablename__, {
+            'grad_date':         'DATE',
+            'opt_start_date':    'DATE',
+            'stem_eligible':     'BOOLEAN DEFAULT 1',
+            'unemployment_days': 'INTEGER DEFAULT 0',
+        }),
+    ]
+
+    with engine.connect() as conn:
+        for table_name, new_columns in migrations:
+            if not inspector.has_table(table_name):
+                continue
+            existing = {c['name'] for c in inspector.get_columns(table_name)}
+            for col_name, col_type in new_columns.items():
+                if col_name not in existing:
+                    conn.execute(sqlalchemy.text(
+                        f'ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}'
+                    ))
+                    logger.info(f"Migration: added {col_name} to {table_name}")
+        conn.commit()
+
+
 app = Flask(__name__, 
             static_folder='../frontend/static',
             template_folder='../frontend/templates')
@@ -82,6 +127,7 @@ db.init_app(app)
 
 with app.app_context():
     db.create_all()
+    _migrate_add_columns(db.engine)
     if not UserProfile.query.first():
         default_profile = UserProfile(
             name=Config.DEFAULT_NAME,
@@ -97,6 +143,11 @@ with app.app_context():
 @app.route('/')
 def index():
     return send_from_directory('../frontend/templates', 'index.html')
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return ('', 204)
 
 
 @app.route('/api/jobs', methods=['GET'])
@@ -334,22 +385,26 @@ def get_search_logs():
 @app.route('/api/scrape/start', methods=['POST'])
 def start_scrape():
     data = request.get_json() or {}
-    sources = data.get('sources', ['linkedin', 'remoteok', 'themuse'])
-    keywords = data.get('keywords', Config.SEARCH_KEYWORDS[:5])
+    sources = data.get('sources') or ['linkedin', 'remoteok', 'themuse']
+    keywords = data.get('keywords') or Config.SEARCH_KEYWORDS[:5]
     locations = data.get('locations') or Config.TARGET_LOCATIONS
-    if not locations:
-        locations = Config.TARGET_LOCATIONS
     min_match_score = data.get('min_match_score', 40)
-    
-    from scrapers.job_scraper_manager import JobScraperManager
-    
-    manager = JobScraperManager(db.session, min_match_score=min_match_score)
-    results = manager.scrape_all(sources=sources, keywords=keywords, locations=locations)
-    
-    return jsonify({
-        'message': 'Scraping completed',
-        'results': results
-    })
+
+    try:
+        from scrapers.job_scraper_manager import JobScraperManager
+        manager = JobScraperManager(db.session, min_match_score=min_match_score)
+        results = manager.scrape_all(sources=sources, keywords=keywords, locations=locations)
+        return jsonify({
+            'message': 'Scraping completed',
+            'results': results
+        })
+    except Exception as e:
+        logger.exception("Scrape failed")
+        return jsonify({
+            'message': 'Scraping failed',
+            'error': str(e),
+            'results': {'sources': {}, 'total_new_jobs': 0, 'total_matched_jobs': 0}
+        }), 500
 
 
 @app.route('/api/config/locations', methods=['GET'])
@@ -423,19 +478,29 @@ def nuworks_scrape():
     
     total_jobs = 0
     new_jobs = 0
-    
+
     for keyword in keywords:
         for location in locations:
             try:
                 jobs = nuworks_scraper_instance.search_jobs(keyword, location)
-                
+
                 for job_data in jobs:
-                    existing = Job.query.filter_by(
-                        source='nuworks',
-                        title=job_data.get('title'),
-                        company=job_data.get('company')
-                    ).first()
-                    
+                    external_id = (job_data.get('external_id') or '').strip()
+                    job_url = (job_data.get('job_url') or '').strip()
+
+                    existing = None
+                    if external_id:
+                        existing = Job.query.filter_by(source='nuworks', external_id=external_id).first()
+                    if not existing and job_url:
+                        existing = Job.query.filter_by(source='nuworks', job_url=job_url).first()
+                    if not existing:
+                        existing = Job.query.filter_by(
+                            source='nuworks',
+                            title=job_data.get('title'),
+                            company=job_data.get('company'),
+                            location=job_data.get('location'),
+                        ).first()
+
                     if not existing:
                         job = Job(
                             title=job_data.get('title'),
@@ -446,17 +511,18 @@ def nuworks_scrape():
                             source='nuworks',
                             job_type=job_data.get('job_type', 'co-op'),
                             date_posted=job_data.get('date_posted'),
-                            is_remote=job_data.get('is_remote', False)
+                            is_remote=job_data.get('is_remote', False),
+                            external_id=external_id or None,
                         )
                         db.session.add(job)
                         new_jobs += 1
-                    
+
                     total_jobs += 1
-                    
+
             except Exception as e:
-                print(f"Error scraping NUWorks {keyword} in {location}: {e}")
+                logger.exception(f"Error scraping NUWorks {keyword} in {location}: {e}")
                 continue
-    
+
     db.session.commit()
     
     return jsonify({
@@ -480,4 +546,4 @@ def nuworks_close():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=Config.PORT)

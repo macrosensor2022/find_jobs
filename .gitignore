@@ -78,6 +78,9 @@ coverage.xml
 chromedriver*
 geckodriver*
 
+# Sponsorship / E-Verify bulk datasets (downloaded locally, not committed)
+data/
+
 # Output files
 agent-tools/
 terminals/

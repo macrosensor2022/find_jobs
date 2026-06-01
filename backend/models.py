@@ -21,11 +21,11 @@ class Job(db.Model):
     location = db.Column(db.String(255))
     description = db.Column(db.Text)
     job_url = db.Column(db.String(500))
-    source = db.Column(db.String(50))  # linkedin, ziprecruiter, nuworks, runway
+    source = db.Column(db.String(50))  # linkedin, remoteok, themuse, etc.
     
     salary_min = db.Column(db.Integer)
     salary_max = db.Column(db.Integer)
-    job_type = db.Column(db.String(50))  # internship, co-op, full-time
+    job_type = db.Column(db.String(50))  # full-time, internship, co-op
     
     date_posted = db.Column(db.DateTime)
     date_scraped = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -43,6 +43,16 @@ class Job(db.Model):
     
     external_id = db.Column(db.String(255))  # External job ID from source
     match_score = db.Column(db.Integer, default=0)  # Profile match score (0-100%)
+    
+    # OPT / sponsorship intelligence
+    is_everify = db.Column(db.Boolean, nullable=True)
+    opt_field_related = db.Column(db.Boolean, default=False)
+    sponsorship_screen = db.Column(db.Boolean, default=False)
+    h1b_lca_count = db.Column(db.Integer, nullable=True)
+    wage_level = db.Column(db.Integer, nullable=True)
+    employer_match_conf = db.Column(db.Float, nullable=True)
+    freshness_hours = db.Column(db.Integer, nullable=True)
+    opt_fit_score = db.Column(db.Integer, nullable=True)
     
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -69,6 +79,14 @@ class Job(db.Model):
             'notes': self.notes,
             'applied_date': self.applied_date.isoformat() if self.applied_date else None,
             'match_score': self.match_score,
+            'is_everify': self.is_everify,
+            'opt_field_related': self.opt_field_related,
+            'sponsorship_screen': self.sponsorship_screen,
+            'h1b_lca_count': self.h1b_lca_count,
+            'wage_level': self.wage_level,
+            'employer_match_conf': self.employer_match_conf,
+            'freshness_hours': self.freshness_hours,
+            'opt_fit_score': self.opt_fit_score,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
@@ -123,6 +141,12 @@ class UserProfile(db.Model):
     resume_path = db.Column(db.String(500))
     target_role = db.Column(db.String(255))
     
+    # OPT timeline fields
+    grad_date = db.Column(db.Date, nullable=True)
+    opt_start_date = db.Column(db.Date, nullable=True)
+    stem_eligible = db.Column(db.Boolean, default=True)
+    unemployment_days = db.Column(db.Integer, default=0)
+    
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
@@ -134,5 +158,65 @@ class UserProfile(db.Model):
             'github_url': self.github_url,
             'linkedin_url': self.linkedin_url,
             'resume_path': self.resume_path,
-            'target_role': self.target_role
+            'target_role': self.target_role,
+            'grad_date': self.grad_date.isoformat() if self.grad_date else None,
+            'opt_start_date': self.opt_start_date.isoformat() if self.opt_start_date else None,
+            'stem_eligible': self.stem_eligible,
+            'unemployment_days': self.unemployment_days,
+        }
+
+
+class EVerifyEmployer(db.Model):
+    __tablename__ = 'everify_employer'
+    __table_args__ = (
+        db.Index('idx_everify_normalized', 'normalized_name'),
+        db.Index('idx_everify_state', 'state'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    employer_name = db.Column(db.String(500), nullable=False)
+    normalized_name = db.Column(db.String(500), nullable=False)
+    city = db.Column(db.String(255))
+    state = db.Column(db.String(100))
+    last_updated = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'employer_name': self.employer_name,
+            'normalized_name': self.normalized_name,
+            'city': self.city,
+            'state': self.state,
+            'last_updated': self.last_updated.isoformat() if self.last_updated else None,
+        }
+
+
+class SponsorHistory(db.Model):
+    __tablename__ = 'sponsor_history'
+    __table_args__ = (
+        db.Index('idx_sponsor_normalized', 'normalized_name'),
+        db.Index('idx_sponsor_year', 'fiscal_year'),
+    )
+    
+    id = db.Column(db.Integer, primary_key=True)
+    employer_name = db.Column(db.String(500), nullable=False)
+    normalized_name = db.Column(db.String(500), nullable=False)
+    fiscal_year = db.Column(db.Integer)
+    lca_count = db.Column(db.Integer)
+    approvals = db.Column(db.Integer)
+    denials = db.Column(db.Integer)
+    median_wage = db.Column(db.Integer)
+    prevailing_wage_level = db.Column(db.Integer)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'employer_name': self.employer_name,
+            'normalized_name': self.normalized_name,
+            'fiscal_year': self.fiscal_year,
+            'lca_count': self.lca_count,
+            'approvals': self.approvals,
+            'denials': self.denials,
+            'median_wage': self.median_wage,
+            'prevailing_wage_level': self.prevailing_wage_level,
         }
