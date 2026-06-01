@@ -1,13 +1,45 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import requests
+import certifi
 from bs4 import BeautifulSoup
 import time
 import random
 import logging
+import ssl
 from functools import wraps
 
 logger = logging.getLogger(__name__)
+
+
+def _build_ssl_context():
+    """
+    Build an SSL context that works across environments.
+
+    On Windows, corporate proxies and SSL inspectors often install certs into
+    the system trust store that certifi's bundle does not contain. This makes
+    requests fail with SSLCertVerificationError when using only certifi.
+
+    Strategy:
+    1. Try `truststore` (uses the OS native trust store on Windows/macOS).
+    2. Fall back to certifi's bundle.
+
+    Returns a verification target suitable for `requests.Session.verify`
+    (either True after truststore injection, or a path to a CA bundle).
+    """
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        logger.info("Using OS native trust store (truststore) for SSL verification")
+        return True
+    except ImportError:
+        logger.debug("truststore not available, falling back to certifi")
+    except Exception as e:
+        logger.warning(f"Failed to initialize truststore ({e}), falling back to certifi")
+    return certifi.where()
+
+
+_SSL_VERIFY = _build_ssl_context()
 
 
 def retry_on_failure(max_retries=3, backoff_factor=1.0):
@@ -35,6 +67,7 @@ def retry_on_failure(max_retries=3, backoff_factor=1.0):
 class BaseScraper(ABC):
     def __init__(self):
         self.session = requests.Session()
+        self.session.verify = _SSL_VERIFY
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -75,35 +108,39 @@ class BaseScraper(ABC):
             'source': self.source_name,
             'salary_min': kwargs.get('salary_min'),
             'salary_max': kwargs.get('salary_max'),
-            'job_type': kwargs.get('job_type', 'internship'),
+            'job_type': kwargs.get('job_type', 'full-time'),
             'date_posted': kwargs.get('date_posted'),
             'is_remote': kwargs.get('is_remote', False),
             'external_id': kwargs.get('external_id', ''),
         }
     
     def parse_relative_date(self, date_str: str) -> datetime:
+        from datetime import timedelta
+
         date_str = date_str.lower().strip()
         now = datetime.now(timezone.utc)
-        
+
         if 'just now' in date_str or 'moment' in date_str:
             return now
+        elif 'minute' in date_str:
+            minutes = self._extract_number(date_str)
+            return now - timedelta(minutes=minutes)
         elif 'hour' in date_str:
             hours = self._extract_number(date_str)
-            new_hour = max(0, now.hour - hours)
-            return now.replace(hour=new_hour)
+            return now - timedelta(hours=hours)
         elif 'day' in date_str:
             days = self._extract_number(date_str)
-            from datetime import timedelta
             return now - timedelta(days=days)
         elif 'week' in date_str:
             weeks = self._extract_number(date_str)
-            from datetime import timedelta
             return now - timedelta(weeks=weeks)
         elif 'month' in date_str:
             months = self._extract_number(date_str)
-            from datetime import timedelta
             return now - timedelta(days=months * 30)
-        
+        elif 'year' in date_str:
+            years = self._extract_number(date_str)
+            return now - timedelta(days=years * 365)
+
         return now
     
     def _extract_number(self, text: str) -> int:

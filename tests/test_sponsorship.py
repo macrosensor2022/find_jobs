@@ -1,8 +1,8 @@
 """
-Unit tests for Phase 1: sponsorship data layer.
+Unit tests for OPT redesign (Phases 1 & 2).
 
-Covers normalize_company_name, lookup_employer (exact & fuzzy),
-and verifies the new tables/columns exist after db.create_all().
+Phase 1: normalize_company_name, lookup_employer, schema creation.
+Phase 2: detect_sponsorship_screen, compute_opt_fit_score.
 
 Run:  python -m pytest tests/test_sponsorship.py -v
   or: python -m unittest tests.test_sponsorship -v
@@ -210,6 +210,94 @@ class TestSchemaCreation(unittest.TestCase):
                 'grad_date', 'opt_start_date', 'stem_eligible', 'unemployment_days',
             ]:
                 self.assertIn(expected, cols, f'Missing column: {expected}')
+
+
+# ---------------------------------------------------------------------------
+# detect_sponsorship_screen (Phase 2)
+# ---------------------------------------------------------------------------
+
+class TestSponsorshipScreen(unittest.TestCase):
+
+    def setUp(self):
+        from scrapers.profile_matcher import ProfileMatcher
+        self.matcher = ProfileMatcher()
+
+    def test_detects_us_citizen_required(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'Data Engineer', 'Must be a US citizen to apply for this role.',
+        ))
+
+    def test_detects_will_not_sponsor(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'Data Analyst', 'We will not sponsor work visas for this position.',
+        ))
+
+    def test_detects_security_clearance(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'Systems Engineer', 'Security clearance required for this role.',
+        ))
+
+    def test_detects_no_sponsorship(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'ML Engineer', 'No sponsorship available.',
+        ))
+
+    def test_detects_without_sponsorship(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'BI Engineer', 'Must be authorized to work without sponsorship.',
+        ))
+
+    def test_clean_posting_returns_false(self):
+        self.assertFalse(self.matcher.detect_sponsorship_screen(
+            'Data Engineer', 'Looking for a skilled data engineer. Python and SQL required.',
+        ))
+
+    def test_html_description_cleaned(self):
+        self.assertTrue(self.matcher.detect_sponsorship_screen(
+            'Analyst', '<p>Must be a <b>U.S. citizen</b></p>',
+        ))
+
+    def test_none_inputs(self):
+        self.assertFalse(self.matcher.detect_sponsorship_screen(None, None))
+
+
+# ---------------------------------------------------------------------------
+# compute_opt_fit_score (Phase 2)
+# ---------------------------------------------------------------------------
+
+class TestComputeOptFitScore(unittest.TestCase):
+
+    @staticmethod
+    def _compute(*a, **kw):
+        from scrapers.profile_matcher import ProfileMatcher
+        return ProfileMatcher.compute_opt_fit_score(*a, **kw)
+
+    def test_base_score_passthrough(self):
+        self.assertEqual(self._compute(60, None, False, False), 60)
+
+    def test_everify_bonus(self):
+        self.assertEqual(self._compute(60, True, False, False), 75)
+
+    def test_field_related_bonus(self):
+        self.assertEqual(self._compute(60, None, False, True), 65)
+
+    def test_both_bonuses(self):
+        self.assertEqual(self._compute(60, True, False, True), 80)
+
+    def test_sponsorship_screen_caps_at_20(self):
+        self.assertEqual(self._compute(80, True, True, True), 20)
+
+    def test_capped_at_100(self):
+        self.assertEqual(self._compute(95, True, False, True), 100)
+
+    def test_zero_base(self):
+        self.assertEqual(self._compute(0, None, False, False), 0)
+
+    def test_none_base_treated_as_zero(self):
+        self.assertEqual(self._compute(None, True, False, True), 20)
+
+    def test_screen_with_low_base_stays_low(self):
+        self.assertEqual(self._compute(10, False, True, False), 10)
 
 
 if __name__ == '__main__':

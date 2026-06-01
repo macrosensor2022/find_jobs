@@ -2,7 +2,7 @@
 The Muse API Scraper
 Free public API - no authentication required for basic access
 https://www.themuse.com/developers/api/v2
-Filtered to USA-based internships/entry-level positions
+Filtered to USA-based entry-level / full-time positions
 """
 
 from .base_scraper import BaseScraper
@@ -34,7 +34,7 @@ NON_US_KEYWORDS = [
 
 
 class TheMuseScraper(BaseScraper):
-    MAX_AGE_DAYS = 3
+    MAX_AGE_DAYS = 30
 
     def __init__(self):
         super().__init__()
@@ -114,10 +114,9 @@ class TheMuseScraper(BaseScraper):
             all_jobs = []
             counters = {'non_us': 0, 'old': 0}
 
-            for level in ['Internship', 'Entry Level']:
-                cats = categories if level == 'Internship' else categories[:2]
+            for level in ['Entry Level']:
                 for us_loc in us_api_locations:
-                    for category in cats:
+                    for category in categories:
                         params = {
                             'page': page - 1,
                             'descending': 'true',

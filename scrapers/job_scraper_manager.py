@@ -15,6 +15,7 @@ from scrapers.arbeitnow_scraper import ArbeitnowScraper
 from scrapers.nuworks_scraper import NUWorksScraper
 from scrapers.remotive_scraper import RemotiveScraper
 from scrapers.profile_matcher import ProfileMatcher
+from scrapers.sponsorship_data import lookup_employer
 from backend.models import Job, SearchLog
 
 
@@ -151,6 +152,7 @@ class JobScraperManager:
                     
                     if not existing:
                         job = self._create_job_from_data(job_data, source)
+                        self._enrich_job_with_opt_data(job, job_data)
                         self.db_session.add(job)
                         new_jobs += 1
                     
@@ -191,6 +193,7 @@ class JobScraperManager:
                             
                             if not existing:
                                 job = self._create_job_from_data(job_data, source)
+                                self._enrich_job_with_opt_data(job, job_data)
                                 self.db_session.add(job)
                                 new_jobs += 1
                             
@@ -215,7 +218,16 @@ class JobScraperManager:
         }
     
     def _create_job_from_data(self, job_data: dict, source: str) -> Job:
-        """Create a Job model instance from job data dict"""
+        """Create a Job model instance from job data dict."""
+        date_posted = job_data.get('date_posted')
+        freshness_hours = None
+        if date_posted:
+            dp = date_posted
+            if dp.tzinfo is None:
+                dp = dp.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - dp
+            freshness_hours = max(0, int(delta.total_seconds() / 3600))
+
         return Job(
             title=job_data.get('title'),
             company=job_data.get('company'),
@@ -225,11 +237,33 @@ class JobScraperManager:
             source=source,
             salary_min=job_data.get('salary_min'),
             salary_max=job_data.get('salary_max'),
-            job_type=job_data.get('job_type', 'internship'),
-            date_posted=job_data.get('date_posted'),
+            job_type=job_data.get('job_type', 'full-time'),
+            date_posted=date_posted,
             is_remote=job_data.get('is_remote', False),
             external_id=job_data.get('external_id'),
-            match_score=job_data.get('match_score', 0)
+            match_score=job_data.get('match_score', 0),
+            freshness_hours=freshness_hours,
+        )
+
+    def _enrich_job_with_opt_data(self, job: Job, job_data: dict):
+        """Add OPT intelligence fields to a new Job before saving."""
+        from config.settings import Config
+
+        emp = lookup_employer(job.company or '', self.db_session)
+        job.is_everify = emp['is_everify']
+        job.h1b_lca_count = emp['h1b_lca_count']
+        job.wage_level = emp['wage_level']
+        job.employer_match_conf = emp['employer_match_conf']
+
+        job.sponsorship_screen = self.profile_matcher.detect_sponsorship_screen(
+            job.title, job.description,
+        )
+
+        job.opt_field_related = (job.match_score or 0) >= Config.OPT_FIELD_MATCH_MIN
+
+        job.opt_fit_score = ProfileMatcher.compute_opt_fit_score(
+            job.match_score, job.is_everify,
+            job.sponsorship_screen, job.opt_field_related,
         )
     
     def scrape_all(self, sources: List[str] = None, keywords: List[str] = None, locations: List[str] = None) -> Dict:

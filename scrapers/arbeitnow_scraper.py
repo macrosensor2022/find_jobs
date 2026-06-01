@@ -47,7 +47,7 @@ US_LOCATION_INDICATORS = [
 
 
 class ArbeitnowScraper(BaseScraper):
-    MAX_AGE_DAYS = 3
+    MAX_AGE_DAYS = 30
 
     def __init__(self):
         super().__init__()
@@ -153,7 +153,7 @@ class ArbeitnowScraper(BaseScraper):
         created_at = job.get('created_at')
         if created_at:
             try:
-                date_posted = datetime.fromtimestamp(created_at)
+                date_posted = datetime.fromtimestamp(created_at, tz=timezone.utc)
             except (ValueError, TypeError, OSError):
                 pass
 

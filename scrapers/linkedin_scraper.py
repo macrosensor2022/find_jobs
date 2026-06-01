@@ -1,12 +1,13 @@
 """
 LinkedIn Guest Jobs API Scraper
-Scrapes public LinkedIn job listings without authentication
-Targets USA internships/entry-level positions, sorted by date
-Defaults to last 24 hours to surface the freshest postings
+Scrapes public LinkedIn job listings without authentication.
+Targets USA full-time / entry-level positions, sorted by date.
+Server-side filter: past week. No client-side hard drop — freshness
+is computed and stored for the UI to badge.
 """
 
 from .base_scraper import BaseScraper
-from datetime import datetime, timezone, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 import urllib.parse
 import re
 
@@ -27,9 +28,9 @@ class LinkedInScraper(BaseScraper):
         params = {
             'keywords': keyword,
             'location': location,
-            'f_TPR': 'r86400',        # Past 24 hours (was r604800 = past week)
+            'f_TPR': 'r604800',       # Past week (relaxed from 24h for full-time cycles)
             'f_E': '1',               # Entry level
-            'f_JT': 'I',              # Internship job type
+            'f_JT': 'F',              # Full-time (was 'I' for internship)
             'start': start,
             'sortBy': 'DD',           # Sort by date
             'geoId': '103644278',     # United States geoId
@@ -42,29 +43,19 @@ class LinkedInScraper(BaseScraper):
             return jobs
 
         job_cards = soup.find_all('div', class_='base-card')
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-        skipped_old = 0
 
         for card in job_cards:
             try:
                 job_data = self.parse_job_listing(card)
                 if not job_data:
                     continue
-                dp = job_data.get('date_posted')
-                if dp:
-                    if dp.tzinfo is None:
-                        dp = dp.replace(tzinfo=timezone.utc)
-                    if dp < cutoff:
-                        skipped_old += 1
-                        continue
                 jobs.append(job_data)
             except Exception as e:
                 print(f"Error parsing LinkedIn job: {e}")
                 continue
 
-        if jobs or skipped_old:
-            print(f"LinkedIn: Found {len(jobs)} fresh jobs for '{keyword}' in '{location}'"
-                  + (f" (skipped {skipped_old} older than 48h)" if skipped_old else ""))
+        if jobs:
+            print(f"LinkedIn: Found {len(jobs)} jobs for '{keyword}' in '{location}'")
 
         return jobs
 
@@ -112,5 +103,5 @@ class LinkedInScraper(BaseScraper):
             job_url=job_url,
             date_posted=date_posted,
             external_id=external_id,
-            is_remote=is_remote
+            is_remote=is_remote,
         )
