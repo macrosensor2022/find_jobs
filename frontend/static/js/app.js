@@ -246,7 +246,7 @@ function renderJobList(containerId, jobs) {
     }
     
     container.innerHTML = jobs.map(job => `
-        <div class="job-card" data-id="${job.id}">
+        <div class="job-card" data-id="${job.id}" data-url="${escapeAttr(job.job_url || '')}">
             <div class="company-logo">${getCompanyInitials(job.company)}</div>
             <div class="job-info">
                 <div class="job-title">${escapeHtml(job.title)}</div>
@@ -259,25 +259,36 @@ function renderJobList(containerId, jobs) {
             ${job.match_score ? `<span class="match-badge ${getMatchLevel(job.match_score)}">${job.match_score}% Match</span>` : ''}
             <span class="source-badge ${job.source}">${job.source}</span>
             <div class="job-actions">
-                <button class="action-btn ${job.is_favorite ? 'favorited' : ''}" 
-                        onclick="toggleFavorite(event, ${job.id})" 
+                <button class="action-btn ${job.is_favorite ? 'favorited' : ''}"
+                        data-action="favorite"
+                        data-id="${job.id}"
                         title="Favorite">
                     <i class="fas fa-star"></i>
                 </button>
-                <button class="action-btn" 
-                        onclick="openJobUrl(event, '${escapeHtml(job.job_url)}')" 
+                <button class="action-btn"
+                        data-action="open-url"
                         title="Open Job">
                     <i class="fas fa-external-link-alt"></i>
                 </button>
             </div>
         </div>
     `).join('');
-    
+
     container.querySelectorAll('.job-card').forEach(card => {
         card.addEventListener('click', (e) => {
-            if (!e.target.closest('.action-btn')) {
-                openJobModal(parseInt(card.dataset.id));
+            const actionBtn = e.target.closest('.action-btn');
+            if (actionBtn) {
+                e.stopPropagation();
+                const action = actionBtn.dataset.action;
+                if (action === 'favorite') {
+                    toggleFavorite(actionBtn, parseInt(actionBtn.dataset.id, 10));
+                } else if (action === 'open-url') {
+                    const url = card.dataset.url;
+                    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                }
+                return;
             }
+            openJobModal(parseInt(card.dataset.id, 10));
         });
     });
 }
@@ -297,11 +308,17 @@ function renderPipelineJobs(containerId, jobs) {
     }
     
     container.innerHTML = jobs.map(job => `
-        <div class="pipeline-job" data-id="${job.id}" onclick="openJobModal(${job.id})">
+        <div class="pipeline-job" data-id="${job.id}">
             <div class="title">${escapeHtml(job.title)}</div>
             <div class="company">${escapeHtml(job.company)}</div>
         </div>
     `).join('');
+
+    container.querySelectorAll('.pipeline-job').forEach(card => {
+        card.addEventListener('click', () => {
+            openJobModal(parseInt(card.dataset.id, 10));
+        });
+    });
 }
 
 function renderPagination() {
@@ -455,7 +472,7 @@ async function openJobModal(jobId) {
                 </div>
                 
                 <div class="detail-actions">
-                    <select id="jobStatus" class="filter-select" onchange="updateJobStatus(${job.id}, this.value)">
+                    <select id="jobStatus" class="filter-select" data-job-id="${job.id}">
                         <option value="not_applied" ${job.application_status === 'not_applied' ? 'selected' : ''}>Not Applied</option>
                         <option value="applied" ${job.application_status === 'applied' ? 'selected' : ''}>Applied</option>
                         <option value="interviewing" ${job.application_status === 'interviewing' ? 'selected' : ''}>Interviewing</option>
@@ -463,7 +480,7 @@ async function openJobModal(jobId) {
                         <option value="rejected" ${job.application_status === 'rejected' ? 'selected' : ''}>Rejected</option>
                         <option value="withdrawn" ${job.application_status === 'withdrawn' ? 'selected' : ''}>Withdrawn</option>
                     </select>
-                    <button class="btn btn-primary" onclick="openJobUrl(event, '${escapeHtml(job.job_url)}')">
+                    <button class="btn btn-primary" id="openJobPostingBtn">
                         <i class="fas fa-external-link-alt"></i> Open Job Posting
                     </button>
                 </div>
@@ -478,7 +495,7 @@ async function openJobModal(jobId) {
                 <div class="detail-notes">
                     <h4>Notes</h4>
                     <textarea id="jobNotes" placeholder="Add notes about this job..." rows="3">${escapeHtml(job.notes || '')}</textarea>
-                    <button class="btn btn-secondary btn-sm" onclick="saveJobNotes(${job.id})">
+                    <button class="btn btn-secondary btn-sm" id="saveJobNotesBtn" data-job-id="${job.id}">
                         <i class="fas fa-save"></i> Save Notes
                     </button>
                 </div>
@@ -502,23 +519,40 @@ async function openJobModal(jobId) {
             </style>
         `;
         
+        const statusSelect = document.getElementById('jobStatus');
+        if (statusSelect) {
+            statusSelect.addEventListener('change', (e) => {
+                updateJobStatus(parseInt(statusSelect.dataset.jobId, 10), e.target.value);
+            });
+        }
+
+        const openJobBtn = document.getElementById('openJobPostingBtn');
+        if (openJobBtn) {
+            openJobBtn.addEventListener('click', (e) => openJobUrl(e, job.job_url || ''));
+        }
+
+        const saveNotesBtn = document.getElementById('saveJobNotesBtn');
+        if (saveNotesBtn) {
+            saveNotesBtn.addEventListener('click', () => {
+                saveJobNotes(parseInt(saveNotesBtn.dataset.jobId, 10));
+            });
+        }
+
         document.getElementById('jobModal').classList.add('active');
     } catch (error) {
         console.error('Error opening job modal:', error);
     }
 }
 
-async function toggleFavorite(event, jobId) {
-    event.stopPropagation();
-    const btn = event.currentTarget;
+async function toggleFavorite(btn, jobId) {
     const isFavorited = btn.classList.contains('favorited');
-    
+
     try {
         await fetchAPI(`/jobs/${jobId}`, {
             method: 'PUT',
             body: JSON.stringify({ is_favorite: !isFavorited })
         });
-        
+
         btn.classList.toggle('favorited');
     } catch (error) {
         console.error('Error toggling favorite:', error);
@@ -551,9 +585,11 @@ async function saveJobNotes(jobId) {
 }
 
 function openJobUrl(event, url) {
-    event.stopPropagation();
+    if (event && typeof event.stopPropagation === 'function') {
+        event.stopPropagation();
+    }
     if (url) {
-        window.open(url, '_blank');
+        window.open(url, '_blank', 'noopener,noreferrer');
     }
 }
 
@@ -741,6 +777,16 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function escapeAttr(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
 function calculateOutputRate(results) {

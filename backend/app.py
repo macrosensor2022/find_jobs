@@ -190,6 +190,25 @@ def get_jobs():
             )
         )
     
+    # OPT-specific filters
+    sponsorship_screen = request.args.get('sponsorship_screen')
+    if sponsorship_screen == 'true':
+        query = query.filter(Job.sponsorship_screen == True)
+    elif sponsorship_screen == 'false':
+        query = query.filter(db.or_(Job.sponsorship_screen == False, Job.sponsorship_screen == None))
+
+    opt_field_related = request.args.get('opt_field_related')
+    if opt_field_related == 'true':
+        query = query.filter(Job.opt_field_related == True)
+
+    min_opt_fit = request.args.get('min_opt_fit', type=int)
+    if min_opt_fit is not None:
+        query = query.filter(Job.opt_fit_score >= min_opt_fit)
+
+    max_freshness = request.args.get('max_freshness', type=int)
+    if max_freshness is not None:
+        query = query.filter(Job.freshness_hours <= max_freshness)
+
     if date_filter:
         now = datetime.now(timezone.utc)
         if date_filter == 'today':
@@ -209,7 +228,15 @@ def get_jobs():
                 )
             )
     
-    query = query.order_by(Job.date_posted.desc().nullslast(), Job.date_scraped.desc())
+    sort_by = request.args.get('sort_by', 'date')
+    if sort_by == 'opt_fit_score':
+        query = query.order_by(Job.opt_fit_score.desc().nullslast(), Job.date_posted.desc().nullslast())
+    elif sort_by == 'match_score':
+        query = query.order_by(Job.match_score.desc().nullslast(), Job.date_posted.desc().nullslast())
+    elif sort_by == 'freshness':
+        query = query.order_by(Job.freshness_hours.asc().nullslast(), Job.date_posted.desc().nullslast())
+    else:
+        query = query.order_by(Job.date_posted.desc().nullslast(), Job.date_scraped.desc())
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
@@ -259,10 +286,18 @@ def update_job(job_id):
 @app.route('/api/jobs/<int:job_id>', methods=['DELETE'])
 def delete_job(job_id):
     job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
-    db.session.delete(job)
+    hard = request.args.get('hard', 'false') == 'true'
+
+    if hard:
+        db.session.delete(job)
+        db.session.commit()
+        logger.info(f"Hard-deleted job {job_id}")
+        return jsonify({'message': 'Job permanently deleted'})
+
+    job.is_hidden = True
     db.session.commit()
-    logger.info(f"Deleted job {job_id}")
-    return jsonify({'message': 'Job deleted successfully'})
+    logger.info(f"Soft-hid job {job_id}")
+    return jsonify({'message': 'Job hidden', 'job': job.to_dict()})
 
 
 @app.route('/api/jobs/add', methods=['POST'])
@@ -371,6 +406,21 @@ def update_profile():
         profile.resume_path = data['resume_path']
     if 'target_role' in data:
         profile.target_role = data['target_role']
+
+    # OPT timeline fields
+    from datetime import date as date_type
+    if 'grad_date' in data:
+        profile.grad_date = (
+            date_type.fromisoformat(data['grad_date']) if data['grad_date'] else None
+        )
+    if 'opt_start_date' in data:
+        profile.opt_start_date = (
+            date_type.fromisoformat(data['opt_start_date']) if data['opt_start_date'] else None
+        )
+    if 'stem_eligible' in data:
+        profile.stem_eligible = bool(data['stem_eligible'])
+    if 'unemployment_days' in data:
+        profile.unemployment_days = int(data['unemployment_days'])
     
     db.session.commit()
     return jsonify(profile.to_dict())
@@ -415,6 +465,90 @@ def get_locations():
 @app.route('/api/config/keywords', methods=['GET'])
 def get_keywords():
     return jsonify(Config.SEARCH_KEYWORDS)
+
+
+@app.route('/api/runway', methods=['GET'])
+def get_runway():
+    """Compute OPT employment runway from the user profile dates."""
+    from datetime import date as date_type
+
+    profile = UserProfile.query.first()
+    if not profile or not profile.opt_start_date:
+        return jsonify({
+            'error': 'Set opt_start_date in your profile first (PUT /api/profile).'
+        }), 400
+
+    today = date_type.today()
+    opt_start = profile.opt_start_date
+    stem = bool(profile.stem_eligible)
+    unemployment_days = profile.unemployment_days or 0
+
+    opt_end = opt_start + timedelta(days=365)
+    stem_end = opt_end + timedelta(days=730) if stem else None
+    effective_end = stem_end if stem else opt_end
+
+    days_remaining = (effective_end - today).days
+    days_elapsed = (today - opt_start).days
+
+    unemployment_limit = 150 if stem else 90
+    unemployment_remaining = max(0, unemployment_limit - unemployment_days)
+
+    return jsonify({
+        'opt_start_date': opt_start.isoformat(),
+        'opt_end_date': opt_end.isoformat(),
+        'stem_eligible': stem,
+        'stem_end_date': stem_end.isoformat() if stem_end else None,
+        'effective_end_date': effective_end.isoformat(),
+        'days_remaining': days_remaining,
+        'days_elapsed': days_elapsed,
+        'unemployment_days_used': unemployment_days,
+        'unemployment_limit': unemployment_limit,
+        'unemployment_days_remaining': unemployment_remaining,
+        'grad_date': profile.grad_date.isoformat() if profile.grad_date else None,
+    })
+
+
+@app.route('/api/sponsorship/refresh', methods=['POST'])
+def refresh_sponsorship():
+    """Re-run employer lookup + screen detection on all visible jobs.
+
+    Call after loading new E-Verify / H-1B data to backfill OPT fields.
+    """
+    from scrapers.sponsorship_data import lookup_employer
+    from scrapers.profile_matcher import ProfileMatcher
+
+    pm = ProfileMatcher()
+    jobs = Job.query.filter(Job.is_hidden == False).all()
+    updated = 0
+
+    for job in jobs:
+        emp = lookup_employer(job.company or '', db.session)
+        job.is_everify = emp['is_everify']
+        job.h1b_lca_count = emp['h1b_lca_count']
+        job.wage_level = emp['wage_level']
+        job.employer_match_conf = emp['employer_match_conf']
+
+        job.sponsorship_screen = pm.detect_sponsorship_screen(
+            job.title, job.description,
+        )
+        job.opt_field_related = (job.match_score or 0) >= Config.OPT_FIELD_MATCH_MIN
+
+        job.opt_fit_score = ProfileMatcher.compute_opt_fit_score(
+            job.match_score, job.is_everify,
+            job.sponsorship_screen, job.opt_field_related,
+        )
+
+        if job.date_posted:
+            dp = job.date_posted
+            if dp.tzinfo is None:
+                dp = dp.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - dp
+            job.freshness_hours = max(0, int(delta.total_seconds() / 3600))
+
+        updated += 1
+
+    db.session.commit()
+    return jsonify({'message': f'Refreshed {updated} jobs', 'updated': updated})
 
 
 # NUWorks scraper instance (kept alive for Duo 2FA flow)

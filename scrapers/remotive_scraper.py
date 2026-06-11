@@ -25,13 +25,13 @@ US_LOCATIONS = [
 NON_US_INDICATORS = [
     'europe', 'uk', 'london', 'germany', 'berlin', 'france', 'paris',
     'canada', 'toronto', 'vancouver', 'australia', 'sydney',
-    'india', 'singapore', 'japan', 'dubai', 'global', 'worldwide',
+    'india', 'singapore', 'japan', 'dubai',
 ]
 
 
 class RemotiveScraper(BaseScraper):
     """Remotive API - free for remote jobs"""
-    
+
     def __init__(self):
         super().__init__()
         self.source_name = "remotive"
@@ -39,102 +39,112 @@ class RemotiveScraper(BaseScraper):
         self.session.headers.update({
             'Accept': 'application/json',
         })
-    
+
     def search_jobs(self, keyword: str = None, location: str = None, page: int = 1) -> list:
         """Search jobs using Remotive API"""
         jobs = []
-        
+
         try:
             params = {
-                'category': 'it',  # IT jobs only
+                'category': 'software-dev',
                 'limit': 50,
             }
-            
+
             if keyword:
                 params['search'] = keyword
-            
+
             response = self.session.get(self.api_url, params=params, timeout=30)
-            
+
             if response.status_code == 200:
                 data = response.json()
                 all_jobs = data.get('jobs', [])
-                
+
                 for job in all_jobs:
-                    job_location = job.get('candidate_required_location', '').lower()
-                    
-                    # Filter to USA only
+                    parsed = self.parse_job_listing(job)
+                    if not parsed:
+                        continue
+
+                    job_location = (parsed.get('location') or '').lower()
                     if not self._is_usa_compatible(job_location):
                         continue
-                    
-                    jobs.append({
-                        'title': job.get('title', ''),
-                        'company': job.get('company_name', ''),
-                        'location': job.get('candidate_required_location', 'Remote'),
-                        'url': job.get('url', ''),
-                        'description': job.get('description', ''),
-                        'date_posted': self._parse_date(job.get('published_at', '')),
-                        'source': 'remotive',
-                    })
-                
+
+                    jobs.append(parsed)
+
                 logger.info(f"Remotive: Found {len(jobs)} USA jobs for '{keyword}'")
             else:
                 logger.warning(f"Remotive API returned {response.status_code}")
-                
+
         except Exception as e:
             logger.error(f"Remotive error: {str(e)}")
-        
+
         return jobs
-    
+
     def _is_usa_compatible(self, location: str) -> bool:
-        """Check if location is USA or Remote"""
-        if not location or location in ('remote', 'anywhere', 'worldwide', 'global'):
+        """Check if location is USA or Remote (worldwide treated as eligible)."""
+        loc = (location or '').lower().strip()
+        if not loc or loc in ('remote', 'anywhere', 'worldwide', 'global'):
             return True
-        
-        # Check if it's clearly non-US
+
         for indicator in NON_US_INDICATORS:
-            if indicator in location:
+            if indicator in loc:
                 return False
-        
-        # Check if it's USA
+
         for indicator in US_LOCATIONS:
-            if indicator in location:
+            if indicator in loc:
                 return True
-        
-        # Default to allowing (might be remote)
+
         return True
-    
+
     def _parse_date(self, date_str: str) -> datetime:
-        """Parse Remotive date format"""
+        """Parse Remotive ISO date; default to now (UTC) when missing/invalid."""
         if not date_str:
             return datetime.now(timezone.utc)
-        
         try:
             return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        except:
+        except (ValueError, TypeError):
             return datetime.now(timezone.utc)
-    
+
     def parse_job_listing(self, job_data: dict) -> dict:
-        """Parse a single job listing"""
-        return {
-            'title': job_data.get('title', ''),
-            'company': job_data.get('company_name', ''),
-            'location': job_data.get('candidate_required_location', 'Remote'),
-            'url': job_data.get('url', ''),
-            'description': job_data.get('description', ''),
-            'date_posted': self._parse_date(job_data.get('published_at', '')),
-            'source': 'remotive',
-        }
-    
+        """Parse a single Remotive job listing into the shared job dict shape."""
+        if not isinstance(job_data, dict):
+            return None
+
+        title = job_data.get('title', '')
+        company = job_data.get('company_name', '')
+        if not title or not company:
+            return None
+
+        location = job_data.get('candidate_required_location', 'Remote') or 'Remote'
+
+        return self.create_job_dict(
+            title=title,
+            company=company,
+            location=location,
+            description=job_data.get('description', ''),
+            job_url=job_data.get('url', ''),
+            date_posted=self._parse_date(job_data.get('publication_date', '')),
+            is_remote=True,
+            external_id=str(job_data.get('id', '')),
+        )
+
     def scrape(self, keywords: list = None, locations: list = None) -> list:
-        """Scrape jobs from Remotive"""
+        """Helper: scrape across multiple keywords and deduplicate."""
         all_jobs = []
-        
         keywords = keywords or ['AI', 'Machine Learning', 'Data Science']
-        locations = locations or ['USA', 'Remote']
-        
+
         for keyword in keywords:
             jobs = self.search_jobs(keyword=keyword)
             all_jobs.extend(jobs)
             time.sleep(0.5)
-        
-        return self._deduplicate_jobs(all_jobs)
+
+        seen = set()
+        deduped = []
+        for job in all_jobs:
+            key = (job.get('external_id') or '').strip() or (job.get('job_url') or '').strip()
+            if not key:
+                key = f"{job.get('title', '')}|{job.get('company', '')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(job)
+        return deduped

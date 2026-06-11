@@ -239,7 +239,7 @@ def load_everify_csv(csv_path, db_session, batch_size=5000):
 
 
 def load_lca_csv(csv_path, db_session, batch_size=5000):
-    """Load an H-1B LCA / employer data-hub CSV into sponsor_history."""
+    """Legacy CSV loader — kept for pre-aggregated data-hub CSVs."""
     from backend.models import SponsorHistory
 
     if not os.path.exists(csv_path):
@@ -302,6 +302,179 @@ def load_lca_csv(csv_path, db_session, batch_size=5000):
 
 
 # ---------------------------------------------------------------------------
+# DOL LCA Disclosure XLSX loader (row-level → aggregated per employer)
+# ---------------------------------------------------------------------------
+
+_UNIT_MULTIPLIER = {
+    'HOUR': 2080,
+    'WEEK': 52,
+    'BI-WEEKLY': 26,
+    'MONTH': 12,
+    'YEAR': 1,
+}
+
+_LEVEL_MAP = {'I': 1, 'II': 2, 'III': 3, 'IV': 4}
+
+
+def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
+    """Load a DOL LCA Disclosure XLSX into sponsor_history.
+
+    Reads with openpyxl read_only mode, aggregates per normalized employer,
+    and upserts into SponsorHistory.
+
+    Expected columns (DOL standard names):
+        EMPLOYER_NAME, CASE_STATUS, WAGE_RATE_OF_PAY_FROM,
+        WAGE_UNIT_OF_PAY, PW_WAGE_LEVEL
+    """
+    import openpyxl
+    from collections import defaultdict, Counter
+    from statistics import median
+    from backend.models import SponsorHistory
+
+    if not os.path.exists(xlsx_path):
+        logger.error(f"File not found: {xlsx_path}")
+        return 0
+
+    logger.info(f"Opening {xlsx_path} (read-only)…")
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    ws = wb.active
+
+    rows_iter = ws.iter_rows(values_only=True)
+    raw_headers = next(rows_iter)
+    headers = [str(h).strip().upper() if h else '' for h in raw_headers]
+    col = {h: i for i, h in enumerate(headers) if h}
+
+    name_idx   = col.get('EMPLOYER_NAME')
+    status_idx = col.get('CASE_STATUS')
+    wage_idx   = col.get('WAGE_RATE_OF_PAY_FROM')
+    unit_idx   = col.get('WAGE_UNIT_OF_PAY')
+    level_idx  = col.get('PW_WAGE_LEVEL')
+
+    if name_idx is None:
+        logger.error(f"EMPLOYER_NAME not found. First 30 headers: {headers[:30]}")
+        wb.close()
+        return 0
+
+    employers = defaultdict(lambda: {
+        'raw_name': '',
+        'lca_count': 0,
+        'approvals': 0,
+        'denials': 0,
+        'wages': [],
+        'levels': [],
+    })
+
+    total_rows = 0
+    skipped = 0
+
+    for row in rows_iter:
+        if name_idx >= len(row):
+            continue
+        raw_name = row[name_idx]
+        if not raw_name or not str(raw_name).strip():
+            skipped += 1
+            continue
+
+        raw_name = str(raw_name).strip()
+        norm = normalize_company_name(raw_name)
+        if not norm:
+            skipped += 1
+            continue
+
+        total_rows += 1
+        emp = employers[norm]
+        if not emp['raw_name']:
+            emp['raw_name'] = raw_name
+
+        emp['lca_count'] += 1
+
+        status = ''
+        if status_idx is not None and status_idx < len(row) and row[status_idx]:
+            status = str(row[status_idx]).strip().upper()
+        if status.startswith('CERTIFIED'):
+            emp['approvals'] += 1
+        elif status == 'DENIED':
+            emp['denials'] += 1
+
+        if wage_idx is not None and wage_idx < len(row) and row[wage_idx]:
+            try:
+                wage_raw = str(row[wage_idx]).replace(',', '').replace('$', '').strip()
+                wage = float(wage_raw)
+                unit = 'YEAR'
+                if unit_idx is not None and unit_idx < len(row) and row[unit_idx]:
+                    unit = str(row[unit_idx]).strip().upper()
+                    if 'BI' in unit and 'WEEK' in unit:
+                        unit = 'BI-WEEKLY'
+                multiplier = _UNIT_MULTIPLIER.get(unit, 1)
+                annual = wage * multiplier
+                if 10_000 < annual < 1_000_000:
+                    emp['wages'].append(annual)
+            except (ValueError, TypeError):
+                pass
+
+        if level_idx is not None and level_idx < len(row) and row[level_idx]:
+            level_str = str(row[level_idx]).strip().upper()
+            for roman, num in _LEVEL_MAP.items():
+                if roman in level_str:
+                    emp['levels'].append(num)
+                    break
+
+        if total_rows % 50_000 == 0:
+            logger.info(f"  … processed {total_rows:,} rows, {len(employers):,} employers")
+
+    wb.close()
+    logger.info(
+        f"Parsed {total_rows:,} LCA rows → {len(employers):,} unique employers "
+        f"(skipped {skipped:,} blank)"
+    )
+
+    new_count = 0
+    updated_count = 0
+    batch = []
+
+    for norm, data in employers.items():
+        median_wage = int(median(data['wages'])) if data['wages'] else None
+        wage_level = Counter(data['levels']).most_common(1)[0][0] if data['levels'] else None
+
+        existing = db_session.query(SponsorHistory).filter_by(
+            normalized_name=norm, fiscal_year=fiscal_year,
+        ).first()
+
+        if existing:
+            existing.employer_name = data['raw_name']
+            existing.lca_count = data['lca_count']
+            existing.approvals = data['approvals']
+            existing.denials = data['denials']
+            existing.median_wage = median_wage
+            existing.prevailing_wage_level = wage_level
+            updated_count += 1
+        else:
+            batch.append(SponsorHistory(
+                employer_name=data['raw_name'],
+                normalized_name=norm,
+                fiscal_year=fiscal_year,
+                lca_count=data['lca_count'],
+                approvals=data['approvals'],
+                denials=data['denials'],
+                median_wage=median_wage,
+                prevailing_wage_level=wage_level,
+            ))
+            new_count += 1
+
+            if len(batch) >= batch_size:
+                db_session.bulk_save_objects(batch)
+                db_session.commit()
+                batch = []
+
+    if batch:
+        db_session.bulk_save_objects(batch)
+    db_session.commit()
+
+    logger.info(f"SponsorHistory FY{fiscal_year}: {new_count:,} new, {updated_count:,} updated")
+    return new_count + updated_count
+
+
+# ---------------------------------------------------------------------------
 # CLI:  python -m scrapers.sponsorship_data --load-everify ...
 # ---------------------------------------------------------------------------
 
@@ -314,8 +487,8 @@ def main():
     )
     parser.add_argument('--load-everify', metavar='CSV',
                         help='Path to E-Verify employer list CSV')
-    parser.add_argument('--load-lca', metavar='CSV',
-                        help='Path to H-1B LCA / employer data hub CSV')
+    parser.add_argument('--load-lca', metavar='FILE',
+                        help='Path to H-1B LCA file (.xlsx DOL disclosure or .csv data hub)')
     parser.add_argument('--clear', action='store_true',
                         help='Clear existing records in target table(s) before loading')
     args = parser.parse_args()
@@ -324,13 +497,11 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    from flask import Flask
     from backend.models import db, EVerifyEmployer, SponsorHistory
     from config.settings import Config
 
-    app = Flask(__name__)
-    app.config.from_object(Config)
-    db.init_app(app)
+    # Reuse the same Flask app as the main backend so we hit the same DB.
+    from backend.app import app
 
     with app.app_context():
         db.create_all()
@@ -349,7 +520,11 @@ def main():
             print(f"Loaded {n} E-Verify employers")
 
         if args.load_lca:
-            n = load_lca_csv(args.load_lca, db.session)
+            path = args.load_lca
+            if path.lower().endswith('.xlsx'):
+                n = load_lca_xlsx(path, db.session)
+            else:
+                n = load_lca_csv(path, db.session)
             print(f"Loaded {n} H-1B sponsor records")
 
 

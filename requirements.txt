@@ -32,6 +32,9 @@ pandas>=2.0.0
 # Fuzzy employer-name matching (sponsorship lookup)
 rapidfuzz>=3.0.0
 
+# XLSX reading (DOL LCA disclosure files)
+openpyxl>=3.1.0
+
 # Environment & Config
 python-dotenv>=1.0.0
 

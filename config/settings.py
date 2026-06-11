@@ -20,6 +20,16 @@ class Config:
     GITHUB_PROFILE = os.getenv('GITHUB_PROFILE', 'https://github.com/macrosensor2022')
     RESUME_PATH = os.getenv('RESUME_PATH', '')
     
+    # LinkedIn crawls keyword × location, so keep this list short to avoid
+    # 150+ page fetches.  Other scrapers use TARGET_LOCATIONS for post-filter.
+    LINKEDIN_LOCATIONS = [
+        "Boston, Massachusetts",
+        "New York, New York",
+        "Portland, Maine",
+        "United States",
+        "Remote",
+    ]
+    
     # Target locations (§4.1 — primary + broad US + remote)
     TARGET_LOCATIONS = [
         "United States", "USA",

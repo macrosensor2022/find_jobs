@@ -120,6 +120,12 @@ class JobScraperManager:
         new_jobs = 0
         matched_jobs = 0
         errors = []
+
+        # LinkedIn uses keyword × location iteration — cap locations to avoid
+        # 150+ page crawls.
+        if source == 'linkedin':
+            from config.settings import Config as _Cfg
+            locations = getattr(_Cfg, 'LINKEDIN_LOCATIONS', locations[:5])
         
         api_scrapers = ['remoteok', 'themuse', 'arbeitnow', 'usajobs']
 
