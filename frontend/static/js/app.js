@@ -20,7 +20,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initModals();
     initFilters();
     initScraper();
-    initNUWorks();
     initProfile();
     loadDashboard();
 });
@@ -137,9 +136,10 @@ function renderSourceChart(data) {
     const container = document.getElementById('sourceChart');
     const colors = {
         linkedin: '#0077b5',
-        ziprecruiter: '#4eac51',
-        runway: '#8b5cf6',
-        nuworks: '#cc0000',
+        remoteok: '#ff5733',
+        themuse: '#009688',
+        remotive: '#8b5cf6',
+        arbeitnow: '#4caf50',
         manual: '#64748b'
     };
     
@@ -610,7 +610,7 @@ function initScraper() {
         const startBtn = document.getElementById('startScrape');
         
         statusEl.style.display = 'block';
-        document.getElementById('statusText').textContent = 'Scraping jobs and matching to your profile...';
+        document.getElementById('statusText').textContent = 'Scraping full-time jobs and scoring OPT fit...';
         resultsEl.style.display = 'none';
         startBtn.disabled = true;
         

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Job Search Dashboard - Summer/Fall Internships</title>
+    <title>JobTracker — OPT Full-Time Job Command Center</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -17,7 +17,7 @@
                     <i class="fas fa-briefcase"></i>
                     <span>JobTracker</span>
                 </div>
-                <p class="subtitle">Summer/Fall Internship Search</p>
+                <p class="subtitle">OPT Full-Time Job Search</p>
             </div>
             
             <nav class="sidebar-nav">
@@ -158,42 +158,34 @@
                     <div class="filter-group">
                         <select id="sourceFilter" class="filter-select">
                             <option value="">All Sources</option>
-                            <option value="linkedin">LinkedIn ✅</option>
-                            <option value="remoteok">RemoteOK ✅</option>
-                            <option value="themuse">The Muse ✅</option>
-                            <option value="remotive">Remotive ✅</option>
-                            <option value="arbeitnow">Arbeitnow ✅</option>
-                            <option value="nuworks">NUWorks (Northeastern)</option>
+                            <option value="linkedin">LinkedIn</option>
+                            <option value="remoteok">RemoteOK</option>
+                            <option value="themuse">The Muse</option>
+                            <option value="remotive">Remotive</option>
+                            <option value="arbeitnow">Arbeitnow</option>
+                            <option value="manual">Manual</option>
                         </select>
                         <select id="locationFilter" class="filter-select">
                             <option value="">All Locations</option>
-                            <!-- Low Competition (Easiest) -->
-                            <option value="Utah">Utah ⭐ (Low Competition)</option>
-                            <option value="Wisconsin">Wisconsin ⭐ (Low Competition)</option>
-                            <option value="Maine">Maine ⭐ (Low Competition)</option>
-                            <option value="Florida">Florida ⭐ (Low Competition)</option>
-                            <!-- Medium Competition -->
-                            <option value="Texas">Texas</option>
-                            <option value="Colorado">Colorado</option>
-                            <option value="Arizona">Arizona</option>
-                            <option value="Nevada">Nevada</option>
-                            <option value="New Jersey">New Jersey</option>
-                            <option value="California">California</option>
-                            <!-- Higher Competition -->
+                            <option value="Boston">Boston</option>
+                            <option value="Portland">Portland, ME</option>
                             <option value="New York">New York</option>
-                            <option value="Remote">Remote (All Locations)</option>
-                            <!-- Additional States -->
-                            <option value="Washington">Washington</option>
-                            <option value="Oregon">Oregon</option>
-                            <option value="Illinois">Illinois</option>
-                            <option value="Michigan">Michigan</option>
-                            <option value="Ohio">Ohio</option>
-                            <option value="Georgia">Georgia</option>
-                            <option value="North Carolina">North Carolina</option>
-                            <option value="Virginia">Virginia</option>
+                            <option value="Remote">Remote</option>
                             <option value="Massachusetts">Massachusetts</option>
-                            <option value="Connecticut">Connecticut</option>
+                            <option value="Maine">Maine</option>
+                            <option value="Texas">Texas</option>
+                            <option value="California">California</option>
+                            <option value="New Jersey">New Jersey</option>
+                            <option value="Colorado">Colorado</option>
+                            <option value="Washington">Washington</option>
+                            <option value="Illinois">Illinois</option>
+                            <option value="Virginia">Virginia</option>
+                            <option value="Georgia">Georgia</option>
                             <option value="Pennsylvania">Pennsylvania</option>
+                            <option value="Ohio">Ohio</option>
+                            <option value="Michigan">Michigan</option>
+                            <option value="Utah">Utah</option>
+                            <option value="North Carolina">North Carolina</option>
                         </select>
                         <select id="dateFilter" class="filter-select">
                             <option value="">All Time</option>
@@ -252,46 +244,32 @@
                 <div class="scraper-container">
                     <div class="card">
                         <div class="card-header">
-                            <h3>Job Scraper</h3>
+                            <h3><i class="fas fa-radar"></i> Full-Time Job Scraper</h3>
                         </div>
                         <div class="card-body">
                             <div class="scraper-form">
                                 <div class="form-group">
-                                    <label>🎯 Active Sources (Working APIs)</label>
+                                    <label>Active Sources</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="linkedin" checked>
-                                            <span>LinkedIn ✅ (USA jobs)</span>
+                                            <span>LinkedIn (Full-time, Past Week)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="remoteok" checked>
-                                            <span>RemoteOK ✅ (Remote/USA)</span>
+                                            <span>RemoteOK (Remote/USA)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="themuse" checked>
-                                            <span>The Muse ✅ (USA internships)</span>
+                                            <span>The Muse (Entry Level)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="remotive" checked>
-                                            <span>Remotive ✅ (Remote/USA)</span>
+                                            <span>Remotive (Remote/USA)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="arbeitnow">
-                                            <span>Arbeitnow (mostly EU)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="source" value="nuworks" checked>
-                                            <span>NUWorks ✅ (Northeastern - needs login)</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>🔐 Requires API Key (Optional)</label>
-                                    <div class="checkbox-group">
-                                        <label class="checkbox-label" style="opacity: 0.6;">
-                                            <input type="checkbox" name="source" value="adzuna">
-                                            <span>Adzuna (needs free API key)</span>
+                                            <span>Arbeitnow (mostly EU, strict USA filter)</span>
                                         </label>
                                     </div>
                                 </div>
@@ -304,7 +282,7 @@
                                             <option value="0">No filter</option>
                                             <option value="20">20%+</option>
                                             <option value="30" selected>30%+</option>
-                                            <option value="40">40%+</option>
+                                            <option value="40">40%+ (OPT field-related)</option>
                                             <option value="50">50%+</option>
                                             <option value="60">60%+</option>
                                             <option value="70">70%+</option>
@@ -312,237 +290,179 @@
                                         <span>match to your profile</span>
                                     </div>
                                 </div>
-                                
+
                                 <div class="form-group">
-                                    <label>Season Focus</label>
+                                    <label>Keywords — Data Engineering / BI</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Summer Internship" checked>
-                                            <span>Summer Internship</span>
+                                            <input type="checkbox" name="keyword" value="Data Engineer" checked>
+                                            <span>Data Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Fall Internship" checked>
-                                            <span>Fall Internship</span>
+                                            <input type="checkbox" name="keyword" value="BI Engineer" checked>
+                                            <span>BI Engineer</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Analytics Engineer" checked>
+                                            <span>Analytics Engineer</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="ETL Developer" checked>
+                                            <span>ETL Developer</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="keyword" value="Data Warehouse Engineer">
+                                            <span>Data Warehouse Engineer</span>
                                         </label>
                                     </div>
                                 </div>
 
                                 <div class="form-group">
-                                    <label>Keywords - Data Roles</label>
+                                    <label>Keywords — Data Science / Analysis</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Data Science Intern" checked>
-                                            <span>Data Science Intern</span>
+                                            <input type="checkbox" name="keyword" value="Data Scientist" checked>
+                                            <span>Data Scientist</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Data Analyst Intern" checked>
-                                            <span>Data Analyst Intern</span>
+                                            <input type="checkbox" name="keyword" value="Data Analyst" checked>
+                                            <span>Data Analyst</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Data Engineer Intern" checked>
-                                            <span>Data Engineer Intern</span>
+                                            <input type="checkbox" name="keyword" value="Business Analyst Data">
+                                            <span>Business Analyst (Data)</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>Keywords - AI/ML Roles</label>
+                                    <label>Keywords — AI / ML / NLP</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Machine Learning Intern" checked>
-                                            <span>Machine Learning Intern</span>
+                                            <input type="checkbox" name="keyword" value="Machine Learning Engineer" checked>
+                                            <span>ML Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="AI Engineer Intern" checked>
-                                            <span>AI Engineer Intern</span>
+                                            <input type="checkbox" name="keyword" value="AI Engineer" checked>
+                                            <span>AI Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="NLP Engineer Intern">
-                                            <span>NLP Engineer Intern</span>
+                                            <input type="checkbox" name="keyword" value="NLP Engineer">
+                                            <span>NLP Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="ML Engineer Intern">
-                                            <span>ML Engineer Intern</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="AI Research Intern">
-                                            <span>AI Research Intern</span>
+                                            <input type="checkbox" name="keyword" value="Applied Scientist">
+                                            <span>Applied Scientist</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>Keywords - SDE Roles</label>
+                                    <label>Keywords — New Grad / Entry Level</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Software Engineer Intern">
-                                            <span>Software Engineer Intern</span>
+                                            <input type="checkbox" name="keyword" value="New Grad Data Engineer">
+                                            <span>New Grad Data Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="SDE Intern">
-                                            <span>SDE Intern</span>
+                                            <input type="checkbox" name="keyword" value="New Grad Data Scientist">
+                                            <span>New Grad Data Scientist</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Software Engineer Intern AI">
-                                            <span>SDE Intern (AI Focus)</span>
+                                            <input type="checkbox" name="keyword" value="Entry Level Data Engineer">
+                                            <span>Entry Level Data Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Software Development Engineer Intern">
-                                            <span>Software Dev Engineer Intern</span>
+                                            <input type="checkbox" name="keyword" value="Junior Data Engineer">
+                                            <span>Junior Data Engineer</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>🎯 Low Competition States (Recommended!)</label>
+                                    <label>Primary Locations</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Utah" checked>
-                                            <span>Utah ⭐ (Easiest!)</span>
+                                            <input type="checkbox" name="location" value="Boston" checked>
+                                            <span>Boston, MA</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Wisconsin" checked>
-                                            <span>Wisconsin ⭐ (Easy!)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Maine" checked>
-                                            <span>Maine ⭐ (Easy!)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Florida" checked>
-                                            <span>Florida ⭐ (Easy!)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Colorado">
-                                            <span>Colorado (Medium)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Arizona">
-                                            <span>Arizona (Medium)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Nevada">
-                                            <span>Nevada (Medium)</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>🏙️ High Opportunity States</label>
-                                    <div class="checkbox-group">
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Texas" checked>
-                                            <span>Texas (Tech Hub!)</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="California" checked>
-                                            <span>California</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="New Jersey" checked>
-                                            <span>New Jersey (Pharma ML!)</span>
+                                            <input type="checkbox" name="location" value="Portland" checked>
+                                            <span>Portland, ME</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="New York" checked>
-                                            <span>New York (High Comp)</span>
+                                            <span>New York</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Remote" checked>
-                                            <span>Remote (All States!)</span>
+                                            <span>Remote</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="United States" checked>
+                                            <span>Broad US</span>
                                         </label>
                                     </div>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>➕ Additional States</label>
+                                    <label>Additional Locations</label>
                                     <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Texas">
+                                            <span>Texas</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="California">
+                                            <span>California</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="New Jersey">
+                                            <span>New Jersey</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Colorado">
+                                            <span>Colorado</span>
+                                        </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Washington">
                                             <span>Washington</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Oregon">
-                                            <span>Oregon</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Illinois">
-                                            <span>Illinois</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Michigan">
-                                            <span>Michigan</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Ohio">
-                                            <span>Ohio</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Georgia">
-                                            <span>Georgia</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="North Carolina">
-                                            <span>North Carolina</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Virginia">
-                                            <span>Virginia</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Massachusetts">
                                             <span>Massachusetts</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Connecticut">
-                                            <span>Connecticut</span>
+                                            <input type="checkbox" name="location" value="Illinois">
+                                            <span>Illinois</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Georgia">
+                                            <span>Georgia</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="Virginia">
+                                            <span>Virginia</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="location" value="North Carolina">
+                                            <span>North Carolina</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="location" value="Pennsylvania">
                                             <span>Pennsylvania</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Minnesota">
-                                            <span>Minnesota</span>
+                                            <input type="checkbox" name="location" value="Ohio">
+                                            <span>Ohio</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Indiana">
-                                            <span>Indiana</span>
+                                            <input type="checkbox" name="location" value="Michigan">
+                                            <span>Michigan</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Tennessee">
-                                            <span>Tennessee</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Missouri">
-                                            <span>Missouri</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Iowa">
-                                            <span>Iowa</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Kansas">
-                                            <span>Kansas</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Nebraska">
-                                            <span>Nebraska</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Idaho">
-                                            <span>Idaho</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="South Carolina">
-                                            <span>South Carolina</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Louisiana">
-                                            <span>Louisiana</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" name="location" value="Oklahoma">
-                                            <span>Oklahoma</span>
+                                            <input type="checkbox" name="location" value="Utah">
+                                            <span>Utah</span>
                                         </label>
                                     </div>
                                 </div>
@@ -567,69 +487,6 @@
                             <div class="scraper-results" id="scraperResults" style="display: none;">
                                 <h4>Results</h4>
                                 <div id="resultsContent"></div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-university"></i> NUWorks Login (with Duo 2FA)</h3>
-                        </div>
-                        <div class="card-body">
-                            <p class="info-text">
-                                <i class="fas fa-info-circle"></i>
-                                NUWorks requires Northeastern credentials and Duo 2FA. Enter your credentials below, 
-                                then complete Duo authentication in the browser window that opens.
-                            </p>
-                            
-                            <div class="nuworks-login-form">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label>Northeastern Email</label>
-                                        <input type="email" id="nuworksUsername" placeholder="your.name@northeastern.edu">
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Password</label>
-                                        <input type="password" id="nuworksPassword" placeholder="Your password">
-                                    </div>
-                                </div>
-                                
-                                <div class="nuworks-actions">
-                                    <button class="btn btn-primary" id="nuworksStartLogin">
-                                        <i class="fas fa-sign-in-alt"></i>
-                                        Start Login
-                                    </button>
-                                    <button class="btn btn-success" id="nuworksCheckDuo" style="display: none;">
-                                        <i class="fas fa-check-circle"></i>
-                                        I Completed Duo
-                                    </button>
-                                    <button class="btn btn-secondary" id="nuworksScrapeJobs" style="display: none;">
-                                        <i class="fas fa-download"></i>
-                                        Scrape NUWorks Jobs
-                                    </button>
-                                    <button class="btn btn-secondary" id="nuworksClose" style="display: none;">
-                                        <i class="fas fa-times"></i>
-                                        Close Session
-                                    </button>
-                                </div>
-                                
-                                <div class="nuworks-status" id="nuworksStatus" style="display: none;">
-                                    <div class="status-badge" id="nuworksStatusBadge">
-                                        <i class="fas fa-spinner fa-spin"></i>
-                                        <span id="nuworksStatusText">Initializing...</span>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="nuworks-steps">
-                                <h4>How it works:</h4>
-                                <ol>
-                                    <li>Enter your Northeastern email and password</li>
-                                    <li>Click "Start Login" - a browser window will open</li>
-                                    <li>Complete Duo 2FA (approve the push notification)</li>
-                                    <li>Click "I Completed Duo" to verify</li>
-                                    <li>Click "Scrape NUWorks Jobs" to fetch jobs</li>
-                                </ol>
                             </div>
                         </div>
                     </div>
@@ -667,7 +524,7 @@
                                 </div>
                                 <div class="form-group">
                                     <label>Target Role</label>
-                                    <input type="text" id="profileRole" value="Data Science / ML / Data Engineering Intern">
+                                    <input type="text" id="profileRole" value="Data Engineer / BI Engineer / Data Scientist (Full-time, New Grad)">
                                 </div>
                                 <div class="form-group">
                                     <label>Resume Path</label>

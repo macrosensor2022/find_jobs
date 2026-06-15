@@ -118,7 +118,7 @@ def lookup_employer(company_name, db_session, confidence_threshold=80):
     ]
     if ev_names:
         best = process.extractOne(
-            normalized, ev_names, scorer=fuzz.token_sort_ratio,
+            normalized, ev_names, scorer=fuzz.token_set_ratio,
         )
         if best and best[1] >= confidence_threshold:
             result['is_everify'] = True
@@ -129,25 +129,133 @@ def lookup_employer(company_name, db_session, confidence_threshold=80):
         db_session.query(SponsorHistory.normalized_name).distinct().all()
     ]
     if sh_names:
-        best = process.extractOne(
-            normalized, sh_names, scorer=fuzz.token_sort_ratio,
+        top_matches = process.extract(
+            normalized, sh_names, scorer=fuzz.token_set_ratio, limit=10,
         )
-        if best and best[1] >= confidence_threshold:
+        qualifying = [m for m in top_matches if m[1] >= confidence_threshold]
+        if qualifying:
+            best_score = qualifying[0][1]
+            tied = [m[0] for m in qualifying if m[1] == best_score]
             sh_row = (
                 db_session.query(SponsorHistory)
-                .filter_by(normalized_name=best[0])
-                .order_by(SponsorHistory.fiscal_year.desc())
+                .filter(SponsorHistory.normalized_name.in_(tied))
+                .order_by(SponsorHistory.lca_count.desc(),
+                          SponsorHistory.fiscal_year.desc())
                 .first()
             )
             if sh_row:
                 result['h1b_lca_count'] = sh_row.lca_count
                 result['median_wage'] = sh_row.median_wage
                 result['wage_level'] = sh_row.prevailing_wage_level
-                conf = round(best[1] / 100.0, 2)
+                conf = round(best_score / 100.0, 2)
                 if result['employer_match_conf'] is None or conf > result['employer_match_conf']:
                     result['employer_match_conf'] = conf
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Batch employer lookup (avoids N x M fuzzy scans during refresh)
+# ---------------------------------------------------------------------------
+
+def batch_lookup_employers(company_names, db_session, confidence_threshold=80):
+    """Look up many employers at once, sharing a single fuzzy index.
+
+    Returns a dict mapping each input name to the same result dict
+    that lookup_employer() returns.
+    """
+    from backend.models import EVerifyEmployer, SponsorHistory
+
+    normalized_map = {}
+    for name in company_names:
+        normalized_map.setdefault(normalize_company_name(name), []).append(name)
+
+    unique_norms = list(normalized_map.keys())
+    results = {name: {
+        'is_everify': None, 'h1b_lca_count': None, 'median_wage': None,
+        'wage_level': None, 'employer_match_conf': None,
+    } for name in company_names}
+
+    ev_set = {
+        r[0] for r in
+        db_session.query(EVerifyEmployer.normalized_name).distinct().all()
+    }
+
+    sh_rows_by_norm = {}
+    for sh in (db_session.query(SponsorHistory)
+               .order_by(SponsorHistory.lca_count.desc()).all()):
+        sh_rows_by_norm.setdefault(sh.normalized_name, sh)
+
+    sh_name_set = set(sh_rows_by_norm.keys())
+
+    fuzzy_cache = {}
+
+    try:
+        from rapidfuzz import process, fuzz
+        ev_list = list(ev_set) if ev_set else []
+        sh_list = list(sh_name_set) if sh_name_set else []
+        has_rapidfuzz = True
+    except ImportError:
+        has_rapidfuzz = False
+        ev_list = []
+        sh_list = []
+
+    for norm in unique_norms:
+        if not norm:
+            continue
+
+        r = {
+            'is_everify': None, 'h1b_lca_count': None, 'median_wage': None,
+            'wage_level': None, 'employer_match_conf': None,
+        }
+
+        if norm in ev_set:
+            r['is_everify'] = True
+            r['employer_match_conf'] = 1.0
+
+        if norm in sh_rows_by_norm:
+            sh = sh_rows_by_norm[norm]
+            r['h1b_lca_count'] = sh.lca_count
+            r['median_wage'] = sh.median_wage
+            r['wage_level'] = sh.prevailing_wage_level
+            if r['employer_match_conf'] is None:
+                r['employer_match_conf'] = 1.0
+
+        if r['employer_match_conf'] is None and has_rapidfuzz:
+            if norm not in fuzzy_cache:
+                ev_best = (process.extractOne(norm, ev_list, scorer=fuzz.token_set_ratio)
+                           if ev_list else None)
+                sh_best_matches = (process.extract(norm, sh_list, scorer=fuzz.token_set_ratio, limit=10)
+                                   if sh_list else [])
+                fuzzy_cache[norm] = (ev_best, sh_best_matches)
+
+            ev_best, sh_best_matches = fuzzy_cache[norm]
+
+            if ev_best and ev_best[1] >= confidence_threshold:
+                r['is_everify'] = True
+                r['employer_match_conf'] = round(ev_best[1] / 100.0, 2)
+
+            qualifying = [m for m in sh_best_matches if m[1] >= confidence_threshold]
+            if qualifying:
+                best_score = qualifying[0][1]
+                tied_names = [m[0] for m in qualifying if m[1] == best_score]
+                sh = None
+                for tn in tied_names:
+                    if tn in sh_rows_by_norm:
+                        if sh is None or sh_rows_by_norm[tn].lca_count > (sh.lca_count or 0):
+                            sh = sh_rows_by_norm[tn]
+                if sh:
+                    r['h1b_lca_count'] = sh.lca_count
+                    r['median_wage'] = sh.median_wage
+                    r['wage_level'] = sh.prevailing_wage_level
+                    conf = round(best_score / 100.0, 2)
+                    if r['employer_match_conf'] is None or conf > r['employer_match_conf']:
+                        r['employer_match_conf'] = conf
+
+        for orig_name in normalized_map[norm]:
+            results[orig_name] = r
+
+    return results
 
 
 # ---------------------------------------------------------------------------

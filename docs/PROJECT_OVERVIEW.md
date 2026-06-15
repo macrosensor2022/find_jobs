@@ -3,7 +3,7 @@
 **Document type:** Technical overview + implementation progress  
 **Project path:** `d:\find_jobs`  
 **Branch:** `feature/opt-redesign`  
-**Last updated:** June 1, 2026
+**Last updated:** June 12, 2026
 
 ---
 
@@ -90,7 +90,7 @@ d:\find_jobs\
 
 ---
 
-## 5. What Has Been Built (Phases 1–2) ✅
+## 5. What Has Been Built (Phases 1–3) ✅
 
 ### Phase 1 — Data Layer for OPT Sponsorship Intelligence
 
@@ -201,6 +201,53 @@ New `_enrich_job_with_opt_data()` method runs for every new job before saving:
 
 ---
 
+### Phase 3 — Backend API Extensions + LCA XLSX Loader
+
+**Commit:** `99b40f7`
+
+**Extended `/api/jobs` with OPT filters:**
+
+| Query param | Behavior |
+|-------------|----------|
+| `sponsorship_screen=true\|false` | Filter by sponsorship screen flag |
+| `opt_field_related=true` | Only field-related jobs (match_score ≥ 40%) |
+| `min_opt_fit=<int>` | Minimum OPT fit score |
+| `max_freshness=<int>` | Maximum freshness_hours |
+| `sort_by=opt_fit_score\|match_score\|freshness` | New sort modes (default remains date) |
+
+**New endpoints:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/runway` | GET | Computes OPT employment timeline from `UserProfile` dates — days remaining, STEM extension end date, unemployment days used/remaining |
+| `/api/sponsorship/refresh` | POST | Re-runs employer lookup + sponsorship screen detection on all visible jobs (backfill after loading E-Verify/H-1B data) |
+
+**Extended `/api/profile` PUT:**
+- Now accepts `grad_date`, `opt_start_date`, `stem_eligible`, `unemployment_days` with ISO date parsing and type coercion
+
+**Fixed `DELETE /api/jobs/<id>`:**
+- Default behavior changed to **soft-hide** (`is_hidden = True`)
+- Hard delete available via `?hard=true` query param
+
+**Rewrote `--load-lca` CLI in `sponsorship_data.py`:**
+- Reads DOL LCA Disclosure XLSX files via `openpyxl` in read-only mode
+- Aggregates ~210k rows into ~30k unique employers (by normalized name)
+- Stores LCA count, approval/denial tallies, and median wage per employer
+- Fixed CLI database path to use the main app's `instance/jobs.db`
+
+**Config changes:**
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `LINKEDIN_LOCATIONS` | 5 entries (Boston, NYC, Portland ME, US, Remote) | Caps LinkedIn crawl to prevent 150+ page fetches |
+
+**Other changes:**
+- Added `openpyxl` to `requirements.txt`
+- Fixed Remotive scraper robustness (error handling, response parsing)
+- Frontend `app.js` carryover fixes from Phase 2 work
+
+---
+
 ### Tests
 
 **41 unit tests** in `tests/test_sponsorship.py`, all passing:
@@ -215,20 +262,7 @@ New `_enrich_job_with_opt_data()` method runs for every new job before saving:
 
 ---
 
-## 6. What's Next (Phases 3–5) 🔜
-
-### Phase 3 — Backend API Changes
-
-**Goal:** Expose the new OPT data through the API and add new endpoints.
-
-| Change | Details |
-|--------|---------|
-| **Extend `/api/jobs` filters** | Add query params: `sponsorship_screen`, `opt_field_related`, `min_opt_fit`, `min_freshness`, `sort_by=opt_fit_score` |
-| **New `/api/runway` endpoint** | Compute OPT timeline: days remaining, STEM extension eligibility, unemployment day tracker based on `UserProfile` dates |
-| **New `/api/sponsorship/refresh`** | Re-run employer lookup + screen detection on existing jobs (backfill after loading E-Verify/H-1B data) |
-| **Extend `/api/profile`** | Accept `grad_date`, `opt_start_date`, `stem_eligible`, `unemployment_days` via PUT |
-| **Fix soft-delete** | `DELETE /api/jobs/<id>` should set `is_hidden=True` instead of permanently deleting |
-| **Limit LinkedIn locations** | Reduce from 30+ to ~5 primary locations to prevent 150+ page crawls |
+## 6. What's Next (Phases 4–5) 🔜
 
 ### Phase 4 — Frontend Redesign
 
@@ -308,6 +342,8 @@ python -m scrapers.sponsorship_data --load-lca data/h1b_lca.csv
                                           │   Flask API        │
                                           │   /api/jobs        │
                                           │   /api/profile     │
+                                          │   /api/runway      │
+                                          │   /api/sponsorship │
                                           │   /api/scrape      │
                                           └────────┬───────────┘
                                                    │
@@ -328,6 +364,7 @@ python -m scrapers.sponsorship_data --load-lca data/h1b_lca.csv
 | `ff397f4` | 1 | Data layer: new tables, OPT columns, sponsorship_data module, migration |
 | `54d16f2` | 2 | Retarget to full-time, sponsorship screen, OPT fit score, scraper updates |
 | `de207cb` | 2.5 | SSL fallback fix (truststore→certifi→unverified), location matching fix |
+| `99b40f7` | 3 | Backend API extensions (OPT filters, runway, refresh), LCA XLSX loader, LinkedIn cap |
 
 ---
 

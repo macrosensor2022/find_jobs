@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Job Search Dashboard - Summer 2026 Co-op/Internship Tracker
+JobTracker — OPT Full-Time Job Command Center
 Run this script to start the application.
 """
 
@@ -15,7 +15,7 @@ def main():
     
     port = Config.PORT
     print("\n" + "="*60)
-    print("  Job Search Dashboard - Summer 2026 Co-op Search")
+    print("  JobTracker — OPT Full-Time Job Command Center")
     print("="*60)
     print("\n  Starting server...")
     print(f"  Open http://localhost:{port} in your browser")

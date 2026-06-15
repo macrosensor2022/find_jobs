@@ -14,7 +14,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scrapers.sponsorship_data import normalize_company_name, lookup_employer
+from scrapers.sponsorship_data import (
+    normalize_company_name, lookup_employer, batch_lookup_employers,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +159,111 @@ class TestLookupEmployer(unittest.TestCase):
             if r['employer_match_conf'] is not None:
                 self.assertTrue(r['is_everify'])
                 self.assertLess(r['employer_match_conf'], 1.0)
+
+    def test_fuzzy_prefers_largest_employer_on_tie(self):
+        """When multiple names tie in fuzzy score, pick highest lca_count."""
+        try:
+            import rapidfuzz  # noqa: F401
+        except ImportError:
+            self.skipTest('rapidfuzz not installed')
+        from backend.models import SponsorHistory
+        with self.app.app_context():
+            self.db.session.add(SponsorHistory(
+                employer_name='Acme Advertising LLC',
+                normalized_name='acme advertising',
+                fiscal_year=2026, lca_count=3,
+                approvals=2, denials=0, median_wage=70000,
+                prevailing_wage_level=1,
+            ))
+            self.db.session.add(SponsorHistory(
+                employer_name='Acme.com Services LLC',
+                normalized_name='acme com services',
+                fiscal_year=2026, lca_count=5000,
+                approvals=4000, denials=100, median_wage=150000,
+                prevailing_wage_level=2,
+            ))
+            self.db.session.commit()
+
+            r = lookup_employer('Acme', self.db.session)
+            self.assertEqual(r['h1b_lca_count'], 5000)
+            self.assertEqual(r['wage_level'], 2)
+
+
+# ---------------------------------------------------------------------------
+# batch_lookup_employers
+# ---------------------------------------------------------------------------
+
+class TestBatchLookupEmployers(unittest.TestCase):
+
+    def setUp(self):
+        from flask import Flask
+        from backend.models import db, EVerifyEmployer, SponsorHistory
+
+        self.app = Flask(__name__)
+        self.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+        self.app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+        self.db = db
+        db.init_app(self.app)
+
+        with self.app.app_context():
+            db.create_all()
+            db.session.add(EVerifyEmployer(
+                employer_name='Google LLC',
+                normalized_name='google',
+                city='Mountain View', state='CA',
+            ))
+            db.session.add(SponsorHistory(
+                employer_name='Google LLC',
+                normalized_name='google',
+                fiscal_year=2026, lca_count=3000,
+                approvals=2800, denials=50,
+                median_wage=190000, prevailing_wage_level=1,
+            ))
+            db.session.add(SponsorHistory(
+                employer_name='Tiny Corp',
+                normalized_name='tiny',
+                fiscal_year=2026, lca_count=2,
+                approvals=1, denials=0,
+                median_wage=60000, prevailing_wage_level=3,
+            ))
+            db.session.commit()
+
+    def test_returns_all_requested_names(self):
+        with self.app.app_context():
+            r = batch_lookup_employers(
+                ['Google LLC', 'Unknown XYZ', ''],
+                self.db.session,
+            )
+            self.assertIn('Google LLC', r)
+            self.assertIn('Unknown XYZ', r)
+            self.assertIn('', r)
+
+    def test_exact_match(self):
+        with self.app.app_context():
+            r = batch_lookup_employers(['Google LLC'], self.db.session)
+            g = r['Google LLC']
+            self.assertTrue(g['is_everify'])
+            self.assertEqual(g['h1b_lca_count'], 3000)
+            self.assertEqual(g['wage_level'], 1)
+            self.assertEqual(g['employer_match_conf'], 1.0)
+
+    def test_unknown_returns_none_fields(self):
+        with self.app.app_context():
+            r = batch_lookup_employers(['NobodyCorp999'], self.db.session)
+            g = r['NobodyCorp999']
+            self.assertIsNone(g['is_everify'])
+            self.assertIsNone(g['h1b_lca_count'])
+            self.assertIsNone(g['wage_level'])
+
+    def test_dedupes_normalized_names(self):
+        """Google LLC and Google Inc should both resolve from one lookup."""
+        with self.app.app_context():
+            r = batch_lookup_employers(
+                ['Google LLC', 'Google Inc.'],
+                self.db.session,
+            )
+            self.assertEqual(r['Google LLC']['h1b_lca_count'], 3000)
+            self.assertEqual(r['Google Inc.']['h1b_lca_count'], 3000)
 
 
 # ---------------------------------------------------------------------------

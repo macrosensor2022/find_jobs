@@ -513,20 +513,25 @@ def refresh_sponsorship():
     """Re-run employer lookup + screen detection on all visible jobs.
 
     Call after loading new E-Verify / H-1B data to backfill OPT fields.
+    Uses batch_lookup_employers for O(unique_companies) fuzzy work
+    instead of O(jobs) scans.
     """
-    from scrapers.sponsorship_data import lookup_employer
+    from scrapers.sponsorship_data import batch_lookup_employers
     from scrapers.profile_matcher import ProfileMatcher
 
     pm = ProfileMatcher()
     jobs = Job.query.filter(Job.is_hidden == False).all()
-    updated = 0
 
+    company_names = list({job.company or '' for job in jobs})
+    emp_map = batch_lookup_employers(company_names, db.session)
+
+    updated = 0
     for job in jobs:
-        emp = lookup_employer(job.company or '', db.session)
-        job.is_everify = emp['is_everify']
-        job.h1b_lca_count = emp['h1b_lca_count']
-        job.wage_level = emp['wage_level']
-        job.employer_match_conf = emp['employer_match_conf']
+        emp = emp_map.get(job.company or '', {})
+        job.is_everify = emp.get('is_everify')
+        job.h1b_lca_count = emp.get('h1b_lca_count')
+        job.wage_level = emp.get('wage_level')
+        job.employer_match_conf = emp.get('employer_match_conf')
 
         job.sponsorship_screen = pm.detect_sponsorship_screen(
             job.title, job.description,
