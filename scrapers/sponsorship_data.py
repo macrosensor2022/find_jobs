@@ -522,10 +522,11 @@ def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
 
         if level_idx is not None and level_idx < len(row) and row[level_idx]:
             level_str = str(row[level_idx]).strip().upper()
-            for roman, num in _LEVEL_MAP.items():
-                if roman in level_str:
-                    emp['levels'].append(num)
-                    break
+            # Extract roman numeral: "Level III - $120,000" → "III"
+            after_level = level_str.split('LEVEL')[-1].strip()
+            roman = after_level.split('-')[0].split('$')[0].split('(')[0].strip()
+            if roman in _LEVEL_MAP:
+                emp['levels'].append(_LEVEL_MAP[roman])
 
         if total_rows % 50_000 == 0:
             logger.info(f"  … processed {total_rows:,} rows, {len(employers):,} employers")

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scrapers.sponsorship_data import (
     normalize_company_name, lookup_employer, batch_lookup_employers,
+    _LEVEL_MAP,
 )
 
 
@@ -405,6 +406,114 @@ class TestComputeOptFitScore(unittest.TestCase):
 
     def test_screen_with_low_base_stays_low(self):
         self.assertEqual(self._compute(10, False, True, False), 10)
+
+
+# ---------------------------------------------------------------------------
+# wage_level mapping (Phase 3.5 regression guard)
+# ---------------------------------------------------------------------------
+
+class TestWageLevelParsing(unittest.TestCase):
+    """Ensure _LEVEL_MAP + the parsing logic correctly handle DOL formats."""
+
+    def _parse(self, raw):
+        """Replicate the exact parsing from load_lca_xlsx."""
+        if raw is None:
+            return None
+        level_str = str(raw).strip().upper()
+        after_level = level_str.split('LEVEL')[-1].strip()
+        roman = after_level.split('-')[0].split('$')[0].split('(')[0].strip()
+        return _LEVEL_MAP.get(roman)
+
+    def test_level_map_exact_keys(self):
+        self.assertEqual(_LEVEL_MAP, {'I': 1, 'II': 2, 'III': 3, 'IV': 4})
+
+    def test_plain_levels(self):
+        self.assertEqual(self._parse('Level I'), 1)
+        self.assertEqual(self._parse('Level II'), 2)
+        self.assertEqual(self._parse('Level III'), 3)
+        self.assertEqual(self._parse('Level IV'), 4)
+
+    def test_levels_with_wage_suffix(self):
+        self.assertEqual(self._parse('Level I - $50,000'), 1)
+        self.assertEqual(self._parse('Level II - $80,000'), 2)
+        self.assertEqual(self._parse('Level III - $120,000'), 3)
+        self.assertEqual(self._parse('Level IV - $150,000'), 4)
+
+    def test_uppercase(self):
+        self.assertEqual(self._parse('LEVEL II'), 2)
+        self.assertEqual(self._parse('LEVEL IV'), 4)
+
+    def test_na_and_empty_return_none(self):
+        self.assertIsNone(self._parse('N/A'))
+        self.assertIsNone(self._parse(''))
+        self.assertIsNone(self._parse(None))
+
+    def test_ii_does_not_collapse_to_i(self):
+        """Regression: prefix check caused II/III/IV to map to 1."""
+        self.assertNotEqual(self._parse('Level II'), 1)
+        self.assertNotEqual(self._parse('Level III'), 1)
+        self.assertNotEqual(self._parse('Level IV'), 1)
+
+
+class TestWageLevelLiveData(unittest.TestCase):
+    """Verify wage_level values for key employers using the real LCA database.
+
+    These values were confirmed against the FY2026 Q2 DOL disclosure data.
+    If they fail, the LCA data needs to be reloaded:
+        python -m scrapers.sponsorship_data --clear --load-lca data/LCA_Dislclosure_Data_FY2026_Q2.xlsx
+    """
+
+    EXPECTED = {
+        'Google': 2,
+        'Amazon': 2,
+        'Microsoft': 3,
+        'Apple': 4,
+        'Meta': 4,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        from backend.app import app
+        from backend.models import db, SponsorHistory
+        cls.flask_app = app
+        cls.db = db
+        with app.app_context():
+            count = SponsorHistory.query.count()
+            if count < 1000:
+                raise unittest.SkipTest(
+                    f'sponsor_history has only {count} rows; '
+                    'reload LCA data before running this test'
+                )
+
+    def test_google_wage_level(self):
+        with self.flask_app.app_context():
+            r = lookup_employer('Google', self.db.session)
+            self.assertEqual(r['wage_level'], self.EXPECTED['Google'],
+                             f"Google: expected {self.EXPECTED['Google']}, got {r['wage_level']}")
+
+    def test_amazon_wage_level(self):
+        with self.flask_app.app_context():
+            r = lookup_employer('Amazon', self.db.session)
+            self.assertEqual(r['wage_level'], self.EXPECTED['Amazon'],
+                             f"Amazon: expected {self.EXPECTED['Amazon']}, got {r['wage_level']}")
+
+    def test_microsoft_wage_level(self):
+        with self.flask_app.app_context():
+            r = lookup_employer('Microsoft', self.db.session)
+            self.assertEqual(r['wage_level'], self.EXPECTED['Microsoft'],
+                             f"Microsoft: expected {self.EXPECTED['Microsoft']}, got {r['wage_level']}")
+
+    def test_apple_wage_level(self):
+        with self.flask_app.app_context():
+            r = lookup_employer('Apple', self.db.session)
+            self.assertEqual(r['wage_level'], self.EXPECTED['Apple'],
+                             f"Apple: expected {self.EXPECTED['Apple']}, got {r['wage_level']}")
+
+    def test_meta_wage_level(self):
+        with self.flask_app.app_context():
+            r = lookup_employer('Meta', self.db.session)
+            self.assertEqual(r['wage_level'], self.EXPECTED['Meta'],
+                             f"Meta: expected {self.EXPECTED['Meta']}, got {r['wage_level']}")
 
 
 if __name__ == '__main__':

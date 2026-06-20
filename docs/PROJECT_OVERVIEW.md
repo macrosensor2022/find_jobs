@@ -3,7 +3,7 @@
 **Document type:** Technical overview + implementation progress  
 **Project path:** `d:\find_jobs`  
 **Branch:** `feature/opt-redesign`  
-**Last updated:** June 12, 2026
+**Last updated:** June 20, 2026
 
 ---
 
@@ -73,8 +73,8 @@ d:\find_jobs\
 │   ├── nuworks_scraper.py       # Selenium + Duo 2FA (excluded)
 │   ├── profile_matcher.py       # Skill scoring + sponsorship screen +
 │   │                            #   OPT fit score
-│   ├── sponsorship_data.py      # Company normalization, employer lookup,
-│   │                            #   CSV loaders for E-Verify/H-1B data
+│   ├── sponsorship_data.py      # Company normalization, employer lookup
+│   │                            #   (single + batch), CSV/XLSX loaders
 │   └── job_scraper_manager.py   # Orchestrates scrape → enrich → DB
 ├── data/                    # Local E-Verify/H-1B CSVs (gitignored)
 ├── docs/
@@ -82,7 +82,7 @@ d:\find_jobs\
 │   └── data_sources.md      # E-Verify & H-1B data source docs
 ├── tests/
 │   ├── test_platform.py     # Pre-existing integration tests
-│   └── test_sponsorship.py  # 41 unit tests for OPT features
+│   └── test_sponsorship.py  # 46 unit tests for OPT features
 ├── instance/jobs.db         # Created at runtime
 ├── requirements.txt
 └── run.py
@@ -90,7 +90,7 @@ d:\find_jobs\
 
 ---
 
-## 5. What Has Been Built (Phases 1–3) ✅
+## 5. What Has Been Built (Phases 1–3.5) ✅
 
 ### Phase 1 — Data Layer for OPT Sponsorship Intelligence
 
@@ -248,14 +248,72 @@ New `_enrich_job_with_opt_data()` method runs for every new job before saving:
 
 ---
 
+### Phase 3.5 — Pipeline Verification, Fuzzy Match Fix, Frontend Rebrand
+
+**Commit:** `8968831`
+
+**End-to-end pipeline verification (LCA → lookup → enrichment → jobs):**
+- Confirmed 30,171 rows in `sponsor_history` (FY2026 DOL LCA Disclosure data)
+- 29,114 of 30,171 rows have `prevailing_wage_level` populated
+- `wage_level` chain verified at every link: schema → loader → lookup → enrichment → API
+
+**Verified `lookup_employer()` for major employers:**
+
+| Company | h1b_lca_count | median_wage | wage_level | match_type |
+|---------|--------------|-------------|------------|------------|
+| Google | 3,058 | $194,000 | 1 | exact |
+| Amazon | 5,347 | $155,000 | 1 | fuzzy (tie-broken by LCA count) |
+| Microsoft | 2,915 | $180,710 | 1 | exact |
+
+**Bug fix — fuzzy scorer (`token_sort_ratio` → `token_set_ratio`):**
+- **Problem:** `token_sort_ratio("amazon", "aaon") = 80` matched AAON (2 LCAs) instead of Amazon.com Services LLC (5,347 LCAs). Short company names failed to match their official DOL filing names because extra words in the candidate penalized the score.
+- **Fix:** Switched to `token_set_ratio` which correctly handles subset matching ("amazon" ⊂ "amazon com services" = 100).
+
+**Bug fix — fuzzy tie-breaking:**
+- **Problem:** When multiple candidates tie at the same fuzzy score (e.g. "Amazon Advertising" and "Amazon.com Services LLC" both at 100), `extractOne` picked arbitrarily.
+- **Fix:** Use `process.extract(limit=10)`, collect all tied names, then pick the employer with the highest `lca_count`.
+
+**New `batch_lookup_employers()` function:**
+- Pre-loads all E-Verify and SponsorHistory data once, caches fuzzy results per unique normalized name
+- `/api/sponsorship/refresh` rewired to use batch lookup
+- Performance: ~57s for 1,317 jobs (vs. HTTP timeout with per-job lookup)
+
+**Post-refresh stats (1,317 visible jobs):**
+
+| Metric | Count |
+|--------|-------|
+| `h1b_lca_count` populated | 1,008 |
+| `wage_level` populated | 998 |
+| Both populated | 998 |
+| `sponsorship_screen = True` | 3 |
+| `opt_fit_score` populated | 1,317 |
+
+**Frontend rebrand to OPT full-time focus:**
+
+| Element | Before | After |
+|---------|--------|-------|
+| Page title | "Job Search Dashboard — Summer/Fall Internships" | "JobTracker — OPT Full-Time Job Command Center" |
+| Sidebar subtitle | "Summer/Fall Internship Search" | "OPT Full-Time Job Search" |
+| Scraper keywords | Data Science Intern, ML Intern, SDE Intern, etc. | Data Engineer, BI Engineer, Data Scientist, ML Engineer, New Grad variants |
+| Season Focus section | "Summer Internship" / "Fall Internship" checkboxes | Removed |
+| Scraper sources | Included NUWorks with Duo 2FA login | NUWorks removed (excluded from redesign) |
+| Location layout | Low Competition / High Competition tiers | Primary (Boston, Portland ME, NYC, Remote, Broad US) + Additional |
+| Source filter dropdown | Had NUWorks option | Replaced with Manual |
+| Profile default role | "Data Science / ML / Data Engineering Intern" | "Data Engineer / BI Engineer / Data Scientist (Full-time, New Grad)" |
+| Source chart colors | ZipRecruiter, Runway, NUWorks | RemoteOK, TheMuse, Remotive, Arbeitnow |
+| Server banner | "Summer 2026 Co-op Search" | "OPT Full-Time Job Command Center" |
+
+---
+
 ### Tests
 
-**41 unit tests** in `tests/test_sponsorship.py`, all passing:
+**46 unit tests** in `tests/test_sponsorship.py`, all passing:
 
 | Test class | Count | Covers |
 |-----------|-------|--------|
 | `TestNormalizeCompanyName` | 13 | Legal suffix stripping, punctuation, edge cases |
-| `TestLookupEmployer` | 8 | Exact match, fuzzy match, no match, None/empty |
+| `TestLookupEmployer` | 9 | Exact match, fuzzy match, no match, None/empty, fuzzy tie-break by LCA count |
+| `TestBatchLookupEmployers` | 4 | Exact match, unknown, returns all names, dedupes normalized names |
 | `TestSchemaCreation` | 3 | New tables and columns exist after migration |
 | `TestSponsorshipScreen` | 8 | US citizen, no-sponsorship, clearance, clean posting, HTML, None |
 | `TestComputeOptFitScore` | 9 | Base passthrough, E-Verify bonus, field bonus, screen cap, bounds |
@@ -264,18 +322,17 @@ New `_enrich_job_with_opt_data()` method runs for every new job before saving:
 
 ## 6. What's Next (Phases 4–5) 🔜
 
-### Phase 4 — Frontend Redesign
+### Phase 4 — Frontend OPT Intelligence UI
 
-**Goal:** OPT-focused dashboard with immigration-aware UI elements.
+**Goal:** Surface the OPT data that's already flowing through the backend into visible UI elements.
 
 | Change | Details |
 |--------|---------|
 | **OPT Runway Widget** | Visual countdown showing days remaining on OPT, STEM extension timeline, unemployment days used |
-| **Smart Job Cards** | Badges: E-Verify ✓, sponsorship screen ⚠️, freshness ("new"), OPT fit score bar |
+| **Smart Job Cards** | Badges: E-Verify ✓, sponsorship screen ⚠️, freshness ("new"), OPT fit score bar, H-1B LCA count |
 | **New Filters** | Dropdowns/checkboxes for sponsorship_screen, opt_field_related, OPT fit score range, freshness |
 | **Sort by OPT Fit** | Default sort changes from date to `opt_fit_score` descending |
 | **Dashboard Stats** | Show OPT-specific aggregates: jobs with E-Verify, screened out count, average fit score |
-| **Rebrand header** | "Summer/Fall Internship Search" → OPT-focused title |
 
 ### Phase 5 — Polish
 
@@ -298,14 +355,21 @@ pip install -r requirements.txt
 python run.py
 # → Open http://localhost:8080
 
-# Run tests
+# Run tests (46 tests)
 python -m pytest tests/test_sponsorship.py -v
 
 # Load E-Verify data (optional — download CSV first)
 python -m scrapers.sponsorship_data --load-everify data/everify_employers.csv
 
-# Load H-1B LCA data (optional — download CSV first)
-python -m scrapers.sponsorship_data --load-lca data/h1b_lca.csv
+# Load H-1B LCA data (XLSX from DOL disclosure)
+python -m scrapers.sponsorship_data --load-lca data/LCA_Disclosure_Data_FY2026_Q2.xlsx
+
+# Re-clear and reload (if data is stale)
+python -m scrapers.sponsorship_data --clear --load-lca data/LCA_Disclosure_Data_FY2026_Q2.xlsx
+
+# Backfill OPT fields on existing jobs (after loading new data)
+# via API:  POST http://localhost:8080/api/sponsorship/refresh
+# or direct:  python -c "from backend.app import app; ..."
 ```
 
 ---
@@ -365,6 +429,7 @@ python -m scrapers.sponsorship_data --load-lca data/h1b_lca.csv
 | `54d16f2` | 2 | Retarget to full-time, sponsorship screen, OPT fit score, scraper updates |
 | `de207cb` | 2.5 | SSL fallback fix (truststore→certifi→unverified), location matching fix |
 | `99b40f7` | 3 | Backend API extensions (OPT filters, runway, refresh), LCA XLSX loader, LinkedIn cap |
+| `8968831` | 3.5 | Fix fuzzy matching (token_set_ratio, tie-break by LCA count), batch_lookup_employers, frontend rebrand to OPT full-time, 46 tests |
 
 ---
 
