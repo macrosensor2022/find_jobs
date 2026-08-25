@@ -424,24 +424,33 @@ _UNIT_MULTIPLIER = {
 _LEVEL_MAP = {'I': 1, 'II': 2, 'III': 3, 'IV': 4}
 
 
-def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
-    """Load a DOL LCA Disclosure XLSX into sponsor_history.
+def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000,
+                  rebuild_metro: bool = True):
+    """Load a DOL LCA Disclosure XLSX into sponsor_history AND metro_soc_lca.
 
-    Reads with openpyxl read_only mode, aggregates per normalized employer,
-    and upserts into SponsorHistory.
+    Reads with openpyxl read_only mode. Same pass aggregates:
+      1) per normalized employer → SponsorHistory
+      2) per (metro, SOC) for CERTIFIED filings → MetroSocLca
 
     Expected columns (DOL standard names):
         EMPLOYER_NAME, CASE_STATUS, WAGE_RATE_OF_PAY_FROM,
-        WAGE_UNIT_OF_PAY, PW_WAGE_LEVEL
+        WAGE_UNIT_OF_PAY, PW_WAGE_LEVEL, WORKSITE_CITY, WORKSITE_STATE, SOC_CODE
     """
     import openpyxl
     from collections import defaultdict, Counter
     from statistics import median
-    from backend.models import SponsorHistory
+    from backend.models import SponsorHistory, MetroSocLca
+    from scrapers.location_utils import load_cbsa_crosswalk, lookup_metro, normalize_state
+    from scrapers.metro_opportunity import normalize_soc, DE_SOCS
 
     if not os.path.exists(xlsx_path):
         logger.error(f"File not found: {xlsx_path}")
         return 0
+
+    try:
+        load_cbsa_crosswalk()
+    except FileNotFoundError as e:
+        logger.warning(f"CBSA crosswalk missing — metro aggregates will be incomplete: {e}")
 
     logger.info(f"Opening {xlsx_path} (read-only)…")
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
@@ -457,6 +466,9 @@ def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
     wage_idx   = col.get('WAGE_RATE_OF_PAY_FROM')
     unit_idx   = col.get('WAGE_UNIT_OF_PAY')
     level_idx  = col.get('PW_WAGE_LEVEL')
+    city_idx   = col.get('WORKSITE_CITY')
+    state_idx  = col.get('WORKSITE_STATE')
+    soc_idx    = col.get('SOC_CODE')
 
     if name_idx is None:
         logger.error(f"EMPLOYER_NAME not found. First 30 headers: {headers[:30]}")
@@ -472,8 +484,17 @@ def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
         'levels': [],
     })
 
+    # (metro_code, soc) -> {name, filings, employers: Counter, all_soc_filings tracked separately}
+    metro_soc = defaultdict(lambda: {
+        'metro_name': '',
+        'filings': 0,
+        'employers': Counter(),
+    })
+    metro_all_soc = Counter()  # metro_code -> all certified filings (size proxy)
+
     total_rows = 0
     skipped = 0
+    certified_with_metro = 0
 
     for row in rows_iter:
         if name_idx >= len(row):
@@ -522,19 +543,48 @@ def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
 
         if level_idx is not None and level_idx < len(row) and row[level_idx]:
             level_str = str(row[level_idx]).strip().upper()
-            # Extract roman numeral: "Level III - $120,000" → "III"
             after_level = level_str.split('LEVEL')[-1].strip()
             roman = after_level.split('-')[0].split('$')[0].split('(')[0].strip()
             if roman in _LEVEL_MAP:
                 emp['levels'].append(_LEVEL_MAP[roman])
 
+        # --- Metro × SOC aggregation (certified only) ---
+        if rebuild_metro and status.startswith('CERTIFIED'):
+            city = ''
+            state = None
+            if city_idx is not None and city_idx < len(row) and row[city_idx]:
+                city = str(row[city_idx]).strip()
+            if state_idx is not None and state_idx < len(row) and row[state_idx]:
+                state = normalize_state(str(row[state_idx]).strip()) or str(row[state_idx]).strip().upper()[:2]
+
+            soc = None
+            if soc_idx is not None and soc_idx < len(row) and row[soc_idx]:
+                soc = normalize_soc(str(row[soc_idx]))
+
+            metro_hit = lookup_metro(city, state) if city and state else None
+            if metro_hit:
+                metro_code, metro_name = metro_hit
+                metro_all_soc[metro_code] += 1
+                if soc:
+                    key = (metro_code, soc)
+                    bucket = metro_soc[key]
+                    bucket['metro_name'] = metro_name
+                    bucket['filings'] += 1
+                    bucket['employers'][norm] += 1
+                    if soc in DE_SOCS:
+                        certified_with_metro += 1
+
         if total_rows % 50_000 == 0:
-            logger.info(f"  … processed {total_rows:,} rows, {len(employers):,} employers")
+            logger.info(
+                f"  … processed {total_rows:,} rows, {len(employers):,} employers, "
+                f"{len(metro_soc):,} metro/soc buckets"
+            )
 
     wb.close()
     logger.info(
         f"Parsed {total_rows:,} LCA rows → {len(employers):,} unique employers "
-        f"(skipped {skipped:,} blank)"
+        f"(skipped {skipped:,} blank); metro/soc buckets={len(metro_soc):,}, "
+        f"DE certified w/ metro={certified_with_metro:,}"
     )
 
     new_count = 0
@@ -580,6 +630,39 @@ def load_lca_xlsx(xlsx_path, db_session, fiscal_year=2026, batch_size=5000):
     db_session.commit()
 
     logger.info(f"SponsorHistory FY{fiscal_year}: {new_count:,} new, {updated_count:,} updated")
+
+    if rebuild_metro:
+        # Replace this FY's metro_soc_lca rows
+        db_session.query(MetroSocLca).filter_by(fiscal_year=fiscal_year).delete()
+        metro_batch = []
+        for (metro_code, soc), data in metro_soc.items():
+            filings = data['filings']
+            emp_counter = data['employers']
+            employer_count = len(emp_counter)
+            top5 = sum(c for _, c in emp_counter.most_common(5))
+            top5_share = (top5 / filings) if filings else 0.0
+            metro_batch.append(MetroSocLca(
+                metro_code=metro_code,
+                metro_name=data['metro_name'],
+                soc_code=soc,
+                fiscal_year=fiscal_year,
+                filing_count=filings,
+                employer_count=employer_count,
+                top5_employer_share=round(top5_share, 4),
+                metro_size_proxy=int(metro_all_soc.get(metro_code, 0)),
+            ))
+            if len(metro_batch) >= batch_size:
+                db_session.bulk_save_objects(metro_batch)
+                db_session.commit()
+                metro_batch = []
+        if metro_batch:
+            db_session.bulk_save_objects(metro_batch)
+        db_session.commit()
+        logger.info(
+            f"MetroSocLca FY{fiscal_year}: {len(metro_soc):,} rows "
+            f"({sum(1 for (_, s) in metro_soc if s in DE_SOCS)} DE-SOC buckets)"
+        )
+
     return new_count + updated_count
 
 
@@ -600,13 +683,15 @@ def main():
                         help='Path to H-1B LCA file (.xlsx DOL disclosure or .csv data hub)')
     parser.add_argument('--clear', action='store_true',
                         help='Clear existing records in target table(s) before loading')
+    parser.add_argument('--rebuild-opportunity', action='store_true',
+                        help='Recompute metro location_opportunity scores after LCA load')
     args = parser.parse_args()
 
-    if not args.load_everify and not args.load_lca:
+    if not args.load_everify and not args.load_lca and not args.rebuild_opportunity:
         parser.print_help()
         sys.exit(1)
 
-    from backend.models import db, EVerifyEmployer, SponsorHistory
+    from backend.models import db, EVerifyEmployer, SponsorHistory, MetroSocLca
     from config.settings import Config
 
     # Reuse the same Flask app as the main backend so we hit the same DB.
@@ -621,7 +706,8 @@ def main():
                 logger.info("Cleared everify_employer table")
             if args.load_lca:
                 SponsorHistory.query.delete()
-                logger.info("Cleared sponsor_history table")
+                MetroSocLca.query.delete()
+                logger.info("Cleared sponsor_history + metro_soc_lca tables")
             db.session.commit()
 
         if args.load_everify:
@@ -635,6 +721,21 @@ def main():
             else:
                 n = load_lca_csv(path, db.session)
             print(f"Loaded {n} H-1B sponsor records")
+
+        if args.rebuild_opportunity or args.load_lca:
+            from scrapers.metro_opportunity import (
+                compute_metro_opportunity_scores, get_metro_breakdown,
+            )
+            scores = compute_metro_opportunity_scores(db.session)
+            print(f"Metro opportunity scores: {len(scores)} metros")
+            print("\nVerification breakdown (Hartford / DFW / Boston):")
+            for row in get_metro_breakdown(db.session):
+                print(
+                    f"  {row.get('metro_name')}: density={row.get('sponsor_density')} "
+                    f"concentration={row.get('concentration_penalty')} "
+                    f"opportunity={row.get('location_opportunity_score')} "
+                    f"flag={row.get('flag')} filings={row.get('de_filing_count')}"
+                )
 
 
 if __name__ == '__main__':

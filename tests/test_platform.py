@@ -189,6 +189,7 @@ def test_scrape_and_match():
             "keywords": ["Data Science Intern"],
             "locations": ["Remote"],
             "min_match_score": 0,
+            "sync": True,
         }
         r = requests.post(
             f"{BASE}/api/scrape/start",
@@ -240,6 +241,7 @@ def test_scrape_empty_locations_default():
             "keywords": ["Data Analyst Intern"],
             "locations": [],
             "min_match_score": 0,
+            "sync": True,
         }
         r = requests.post(
             f"{BASE}/api/scrape/start",

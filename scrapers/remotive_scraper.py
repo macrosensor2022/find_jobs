@@ -53,7 +53,7 @@ class RemotiveScraper(BaseScraper):
             if keyword:
                 params['search'] = keyword
 
-            response = self.session.get(self.api_url, params=params, timeout=30)
+            response = self.safe_get(self.api_url, params=params, timeout=30)
 
             if response.status_code == 200:
                 data = response.json()
@@ -80,20 +80,24 @@ class RemotiveScraper(BaseScraper):
         return jobs
 
     def _is_usa_compatible(self, location: str) -> bool:
-        """Check if location is USA or Remote (worldwide treated as eligible)."""
+        """Check if location is USA or Remote. Worldwide only passes if no
+        non-US indicators are present."""
         loc = (location or '').lower().strip()
-        if not loc or loc in ('remote', 'anywhere', 'worldwide', 'global'):
+        if not loc or loc in ('remote', 'anywhere'):
             return True
 
         for indicator in NON_US_INDICATORS:
             if indicator in loc:
                 return False
 
+        if loc in ('worldwide', 'global'):
+            return True
+
         for indicator in US_LOCATIONS:
             if indicator in loc:
                 return True
 
-        return True
+        return False
 
     def _parse_date(self, date_str: str) -> datetime:
         """Parse Remotive ISO date; default to now (UTC) when missing/invalid."""

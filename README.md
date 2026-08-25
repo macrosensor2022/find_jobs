@@ -1,4 +1,4 @@
-# JobTracker - Internship & Co-op Job Search Dashboard
+# JobTracker — Full-Time New Grad Job Command Center
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python">
@@ -6,29 +6,25 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
-A modern, full-stack job search aggregator designed for students seeking internships and co-op positions. Built with Flask backend and a beautiful dark-themed responsive frontend.
+OPT-oriented job search dashboard focused on **full-time new-grad / early-career** Data Engineering, Analytics, and BI roles. Co-op and internship titles are filtered out by default.
+
+Built with Flask + a responsive frontend. Repo: [macrosensor2022/find_jobs](https://github.com/macrosensor2022/find_jobs).
 
 ![Dashboard Preview](docs/dashboard-preview.png)
 
 ## Features
 
 ### Job Aggregation
-- **Multi-source scraping**: Aggregate jobs from RemoteOK, The Muse, Arbeitnow, LinkedIn, Adzuna, and NUWorks
-- **API-first approach**: Uses official APIs where available for reliable data collection
-- **Profile matching**: Intelligent scoring system that matches jobs to your skills (0-100%)
-- **Duplicate detection**: Automatically prevents duplicate job entries
+- **Multi-source scraping**: [SimplifyJobs GitHub new-grad lists](https://github.com/SimplifyJobs/New-Grad-Positions), ATS boards (Greenhouse/Lever/Ashby), RemoteOK, The Muse, Remotive, Arbeitnow, LinkedIn, Adzuna, JSearch
+- **Background scrapes**: UI stays usable; poll `/api/scrape/status` while jobs land in the DB
+- **Profile matching**: Skill + location + experience gate (drops senior / 3+ years; drops intern/co-op in FT mode)
+- **OPT intelligence**: E-Verify / H-1B LCA signals, sponsorship screens, metro opportunity scoring
+- **Dedup**: Cross-source URL + title/company dedup
 
 ### Job Management
-- **Smart filtering**: Filter by source, location, date, and application status
-- **Favorites**: Star jobs you're interested in for quick access
-- **Application tracking**: Track your application pipeline (Applied → Interviewing → Offer)
-- **Notes**: Add personal notes to any job posting
-
-### Modern UI/UX
-- **Dark theme**: Easy on the eyes for long job search sessions
-- **Responsive design**: Works on desktop, tablet, and mobile
-- **Real-time updates**: Instant feedback on actions
-- **Keyboard shortcuts**: Power user features for efficiency
+- Filter by source, location, date, match/rank score, application status
+- Favorites, notes, and application pipeline tracking
+- Freshness window (default last 7 days after scrape)
 
 ## Tech Stack
 
@@ -36,242 +32,114 @@ A modern, full-stack job search aggregator designed for students seeking interns
 |-------|------------|
 | Backend | Python 3.9+, Flask 3.0, SQLAlchemy |
 | Frontend | HTML5, CSS3, Vanilla JavaScript |
-| Database | SQLite (easily switchable to PostgreSQL) |
-| Scraping | Requests, BeautifulSoup4, Selenium |
+| Database | SQLite (PostgreSQL-ready) |
+| Scraping | Requests, BeautifulSoup4, Selenium (NUWorks) |
 
 ## Quick Start
 
 ### Prerequisites
-- Python 3.9 or higher
-- pip (Python package manager)
-- Chrome/Brave browser (for NUWorks scraping)
+- Python 3.9+
+- pip
+- Chrome/Brave (only if using NUWorks)
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/macrosensor2022/find_jobs.git
-   cd find_jobs
-   ```
+```bash
+git clone https://github.com/macrosensor2022/find_jobs.git
+cd find_jobs
 
-2. **Create virtual environment** (recommended)
-   ```bash
-   python -m venv venv
-   
-   # Windows
-   venv\Scripts\activate
-   
-   # macOS/Linux
-   source venv/bin/activate
-   ```
+python -m venv venv
+# Windows: venv\Scripts\activate
+# macOS/Linux: source venv/bin/activate
 
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+pip install -r requirements.txt
+cp .env.example .env   # optional API keys
+python run.py
+```
 
-4. **Configure environment** (optional)
-   ```bash
-   cp .env.example .env
-   # Edit .env with your settings
-   ```
-
-5. **Run the application**
-   ```bash
-   python run.py
-   ```
-
-6. **Open your browser**
-   ```
-   http://localhost:8080
-   ```
+Open **http://localhost:8080**
 
 ## Configuration
 
-### Environment Variables
-
-Create a `.env` file in the root directory:
-
 ```env
-# NUWorks credentials (Northeastern University)
-NUWORKS_USERNAME=your.email@northeastern.edu
-NUWORKS_PASSWORD=your_password
+# Optional Adzuna (~1000 free calls/month)
+ADZUNA_APP_ID=
+ADZUNA_APP_KEY=
+MAX_ADZUNA_CALLS=20
 
-# Adzuna API (optional - get free key at https://developer.adzuna.com/)
-ADZUNA_APP_ID=your_app_id
-ADZUNA_APP_KEY=your_app_key
+# Optional JSearch / RapidAPI
+JSEARCH_API_KEY=
+MAX_JSEARCH_CALLS=8
 
-# Resume path for profile matching
-RESUME_PATH=C:/path/to/your/resume.pdf
+# NUWorks (optional)
+NUWORKS_USERNAME=
+NUWORKS_PASSWORD=
 ```
 
-### Profile Matching
-
-The profile matcher uses weighted keywords to score job relevance. Edit `scrapers/profile_matcher.py` to customize:
-
-```python
-self.skills = {
-    'python': 15,        # High weight for Python
-    'machine learning': 15,
-    'data science': 15,
-    'intern': 20,        # Boost for internship roles
-    'co-op': 25,
-    # Add your skills...
-}
-```
+`config/settings.py` controls:
+- `SEEKING_FULL_TIME_NEW_GRAD = True` — hard-drops intern/co-op titles
+- `TARGET_STATES` / `EXCLUDED_STATES` (CA/WA/OR excluded)
+- `GITHUB_SIMPLIFY_FEEDS` — SimplifyJobs listings.json URLs
+- Profile skills / keywords for DE · Analytics · BI · Azure · SSIS
 
 ## Usage
 
-### Scraping Jobs
-
-1. Navigate to the **Scraper** tab
-2. Select job sources (RemoteOK, The Muse recommended)
-3. Choose keywords and locations
-4. Set minimum match score (30% recommended)
-5. Click **Start Scraping**
-
-### NUWorks (Northeastern Students)
-
-NUWorks requires Duo 2FA authentication:
-
-1. Enter your Northeastern email and password
-2. Click **Start Login** - a browser window opens
-3. Complete Duo authentication on your phone
-4. Click **I Completed Duo**
-5. Click **Scrape NUWorks Jobs**
-
-### Managing Jobs
-
-- **Star**: Click the star icon to favorite a job
-- **Apply**: Click the external link to apply, then mark as "Applied"
-- **Hide**: Remove uninteresting jobs from your feed
-- **Notes**: Add notes about each opportunity
+1. Open **Scraper**
+2. Keep **GitHub New Grad FT** checked (internships optional / off by default)
+3. Pick DE / new-grad keywords and locations
+4. **Start Scraping** — runs in the background; jobs auto-refresh
+5. Review **Jobs** (last 7 days) sorted by rank / match
 
 ## Testing
 
-With the app running (`python run.py`), you can run a basic end-to-end API test suite:
-
 ```bash
+# Unit tests (no server required)
+python -m unittest tests.test_github_simplify tests.test_experience_filter tests.test_adzuna_jsearch tests.test_location_metro -v
+
+# End-to-end API tests (server must be running)
+python run.py   # other terminal
 python -m tests.test_platform
 ```
 
 ## Recent Updates
 
-- **Fresher job results**: date windows were tightened across scrapers to prioritize recent postings.
-- **Better freshness sorting**: job listing order now prioritizes `date_posted` (when available) over just scrape time.
-- **Scraper UX improvement**: after scraping, you can jump directly to **View Fresh Jobs (Last 24 Hours)** from the UI.
-- **Safer scrape defaults**: if the frontend sends empty locations, the backend now falls back to configured default locations.
-- **Platform test coverage**: added end-to-end API/scrape flow checks in `tests/test_platform.py`.
+- Full-time **new-grad** focus (co-op/intern hard-dropped)
+- SimplifyJobs GitHub feeds (new-grad + optional intern lists)
+- Async scrape + status polling; SSL hardenings for Windows
+- Adzuna + JSearch budgeted APIs; ATS board fan-out
+- Metro opportunity / LCA enrichment; experience gate
+- Experience + GitHub scraper unit tests
 
 ## Project Structure
 
 ```
 find_jobs/
-├── backend/
-│   ├── app.py              # Flask application & routes
-│   └── models.py           # SQLAlchemy database models
-├── config/
-│   └── settings.py         # Application configuration
-├── frontend/
-│   ├── static/
-│   │   ├── css/style.css   # Styles
-│   │   └── js/app.js       # Frontend JavaScript
-│   └── templates/
-│       └── index.html      # Main HTML template
-├── scrapers/
-│   ├── base_scraper.py     # Base scraper class
-│   ├── remoteok_scraper.py # RemoteOK API scraper
-│   ├── themuse_scraper.py  # The Muse API scraper
-│   ├── linkedin_scraper.py # LinkedIn scraper
-│   ├── adzuna_scraper.py   # Adzuna API scraper
-│   ├── nuworks_scraper.py  # NUWorks with Selenium
-│   ├── profile_matcher.py  # Job-profile matching
-│   └── job_scraper_manager.py # Scraper orchestration
-├── instance/               # SQLite database (auto-created)
-├── .env.example           # Environment template
-├── .gitignore
-├── requirements.txt       # Python dependencies
-├── run.py                 # Application entry point
+├── backend/          # Flask app + models
+├── config/           # settings.py
+├── frontend/         # templates + static
+├── scrapers/         # sources + matcher + metro/LCA
+├── scripts/          # rescore / sample / metro helpers
+├── tests/            # unit + platform tests
+├── run.py
 └── README.md
 ```
 
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/jobs` | GET | List jobs with filters |
-| `/api/jobs/<id>` | GET | Get job details |
-| `/api/jobs/<id>` | PUT | Update job (favorite, status) |
-| `/api/jobs/<id>` | DELETE | Hide job |
-| `/api/jobs` | POST | Add job manually |
-| `/api/stats` | GET | Dashboard statistics |
-| `/api/scrape/start` | POST | Start job scraping |
-| `/api/profile` | GET/PUT | User profile |
-
 ## Job Sources
 
-| Source | Type | Auth Required | Status |
-|--------|------|---------------|--------|
-| RemoteOK | API | No | ✅ Working |
-| The Muse | API | No | ✅ Working |
-| LinkedIn | Web | No | ⚠️ Limited |
-| Adzuna | API | Yes (free) | ✅ Working |
-| NUWorks | Web | Yes (Duo 2FA) | ✅ Working |
-| Indeed | RSS | No | ❌ Deprecated |
-
-## Troubleshooting
-
-### Port 5000 blocked
-Windows sometimes blocks port 5000. The app defaults to port 8080:
-```bash
-# In run.py, change port:
-app.run(port=8080)
-```
-
-### NUWorks browser not opening
-Ensure Chrome or Brave is installed:
-```bash
-# Install selenium and webdriver-manager
-pip install selenium webdriver-manager
-```
-
-### Database errors after updates
-Delete the database and restart:
-```bash
-rm instance/jobs.db
-python run.py
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+| Source | Type | Auth | Notes |
+|--------|------|------|-------|
+| GitHub New Grad | JSON | No | SimplifyJobs [New-Grad-Positions](https://github.com/SimplifyJobs/New-Grad-Positions) |
+| GitHub Intern | JSON | No | Optional — off by default |
+| ATS (GH/Lever/Ashby) | API | No | Configured boards |
+| RemoteOK / The Muse / Remotive | API | No | |
+| Adzuna / JSearch | API | Free key | Optional |
+| LinkedIn | Web | No | Slow; off by default |
+| NUWorks | Web | Duo 2FA | Northeastern |
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [RemoteOK](https://remoteok.com) for their public API
-- [The Muse](https://www.themuse.com) for their job API
-- [Font Awesome](https://fontawesome.com) for icons
-- [Inter Font](https://rsms.me/inter/) for typography
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-**Built with ❤️ for the Summer 2026 Co-op Search**  
-*Last updated: April 2026*
-
-### Additional April 2026 updates
-- Removed hardcoded secrets; sensitive values now use environment variables.
-- Added input validation for API endpoints.
-- Updated datetime handling to use timezone-aware timestamps.
-- Added database indexes for query performance.
-- Replaced print statements with structured logging.
-- Added retry mechanism with exponential backoff for scrapers.
-- Profile matcher skills can be overridden with environment variables.
-- Server can listen on `0.0.0.0` for external access.
+**Built for full-time new-grad DE / Analytics search (OPT)** · [github.com/macrosensor2022/find_jobs](https://github.com/macrosensor2022/find_jobs)

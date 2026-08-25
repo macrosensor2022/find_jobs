@@ -67,7 +67,7 @@ class TheMuseScraper(BaseScraper):
     def _fetch_and_filter(self, params, keyword, all_jobs, counters):
         """Fetch one API page and filter results."""
         url = f"{self.api_url}?{urllib.parse.urlencode(params, doseq=True)}"
-        response = self.session.get(url, timeout=30)
+        response = self.safe_get(url, timeout=30)
         if response.status_code != 200:
             return
         data = response.json()

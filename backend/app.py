@@ -5,13 +5,87 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
-from backend.models import db, Job, SearchLog, UserProfile, EVerifyEmployer, SponsorHistory
+from backend.models import db, Job, SearchLog, UserProfile, EVerifyEmployer, SponsorHistory, MetroOpportunity, MetroSocLca, UnparsedLocation
 from config.settings import Config
 import logging
+import threading
+import copy
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Background scrape state (single-job queue)
+_scrape_lock = threading.Lock()
+_scrape_state = {
+    'status': 'idle',  # idle | running | completed | failed
+    'message': '',
+    'started_at': None,
+    'completed_at': None,
+    'progress': {},
+    'results': None,
+    'error': None,
+    'params': None,
+}
+
+
+def _run_scrape_job(sources, keywords, locations, min_match_score):
+    """Run scrape in a background thread with its own app context."""
+    with app.app_context():
+        try:
+            from scrapers.job_scraper_manager import JobScraperManager
+
+            def on_progress(info):
+                with _scrape_lock:
+                    progress = dict(_scrape_state.get('progress') or {})
+                    progress.update(info or {})
+                    _scrape_state['progress'] = progress
+                    if info and info.get('message'):
+                        _scrape_state['message'] = info['message']
+                    # Expose live totals while still running
+                    if info and info.get('partial_results'):
+                        _scrape_state['results'] = copy.deepcopy(info['partial_results'])
+
+            manager = JobScraperManager(
+                db.session,
+                min_match_score=min_match_score,
+                progress_callback=on_progress,
+            )
+            results = manager.scrape_all(
+                sources=sources, keywords=keywords, locations=locations,
+            )
+            with _scrape_lock:
+                _scrape_state['status'] = 'completed'
+                _scrape_state['results'] = results
+                _scrape_state['completed_at'] = datetime.now(timezone.utc).isoformat()
+                _scrape_state['message'] = (
+                    f"Done — {results.get('total_new_jobs', 0)} new jobs "
+                    f"({results.get('total_matched_jobs', 0)} matched)"
+                )
+                _scrape_state['progress'] = {
+                    **(_scrape_state.get('progress') or {}),
+                    'current_source': None,
+                    'sources_done': list((results.get('sources') or {}).keys()),
+                    'sources_total': len(sources),
+                    'total_new_jobs': results.get('total_new_jobs', 0),
+                    'total_matched_jobs': results.get('total_matched_jobs', 0),
+                }
+        except Exception as e:
+            logger.exception('Background scrape failed')
+            with _scrape_lock:
+                _scrape_state['status'] = 'failed'
+                _scrape_state['error'] = str(e)
+                _scrape_state['completed_at'] = datetime.now(timezone.utc).isoformat()
+                _scrape_state['message'] = f'Scrape failed: {e}'
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                db.session.remove()
+            except Exception:
+                pass
 
 
 def validate_job_data(data: dict, partial: bool = False) -> tuple:
@@ -94,6 +168,19 @@ def _migrate_add_columns(engine):
             'employer_match_conf': 'FLOAT',
             'freshness_hours':     'INTEGER',
             'opt_fit_score':       'INTEGER',
+            'worksite_city':       'VARCHAR(255)',
+            'worksite_state':      'VARCHAR(10)',
+            'metro':               'VARCHAR(255)',
+            'metro_code':          'VARCHAR(16)',
+            'location_opportunity_score': 'FLOAT',
+            'competition_score':   'FLOAT',
+            'rank_score':          'FLOAT',
+            'in_target_states':    'BOOLEAN',
+            'required_years':      'FLOAT',
+            'exp_hard_drop':       'BOOLEAN',
+            'market':              'VARCHAR(8)',
+            'salary_predicted':    'BOOLEAN',
+            'description_partial': 'BOOLEAN',
         }),
         (UserProfile.__tablename__, {
             'grad_date':         'DATE',
@@ -126,18 +213,37 @@ CORS(app)
 db.init_app(app)
 
 with app.app_context():
+    from datetime import date as _date
     db.create_all()
     _migrate_add_columns(db.engine)
-    if not UserProfile.query.first():
-        default_profile = UserProfile(
+    profile = UserProfile.query.first()
+    if not profile:
+        profile = UserProfile(
             name=Config.DEFAULT_NAME,
+            email=getattr(Config, 'DEFAULT_EMAIL', ''),
             github_url=Config.DEFAULT_GITHUB_URL,
+            linkedin_url=getattr(Config, 'DEFAULT_LINKEDIN_URL', ''),
             resume_path=Config.RESUME_PATH,
-            target_role=Config.DEFAULT_TARGET_ROLE
+            target_role=Config.DEFAULT_TARGET_ROLE,
+            grad_date=_date(2027, 12, 15),
+            stem_eligible=True,
         )
-        db.session.add(default_profile)
+        db.session.add(profile)
         db.session.commit()
         logger.info("Created default user profile")
+    else:
+        # Keep in sync with LinkedIn-researched defaults
+        profile.name = Config.DEFAULT_NAME
+        profile.email = getattr(Config, 'DEFAULT_EMAIL', '') or profile.email
+        profile.github_url = Config.DEFAULT_GITHUB_URL
+        profile.linkedin_url = getattr(Config, 'DEFAULT_LINKEDIN_URL', '') or profile.linkedin_url
+        profile.target_role = Config.DEFAULT_TARGET_ROLE
+        if not profile.grad_date:
+            profile.grad_date = _date(2027, 12, 15)
+        if profile.stem_eligible is None:
+            profile.stem_eligible = True
+        db.session.commit()
+        logger.info("Synced user profile from LinkedIn-researched defaults")
 
 
 @app.route('/')
@@ -229,7 +335,14 @@ def get_jobs():
             )
     
     sort_by = request.args.get('sort_by', 'date')
-    if sort_by == 'opt_fit_score':
+    if sort_by == 'rank_score':
+        query = query.order_by(Job.rank_score.desc().nullslast(), Job.match_score.desc().nullslast())
+    elif sort_by == 'location_opportunity':
+        query = query.order_by(
+            Job.location_opportunity_score.desc().nullslast(),
+            Job.match_score.desc().nullslast(),
+        )
+    elif sort_by == 'opt_fit_score':
         query = query.order_by(Job.opt_fit_score.desc().nullslast(), Job.date_posted.desc().nullslast())
     elif sort_by == 'match_score':
         query = query.order_by(Job.match_score.desc().nullslast(), Job.date_posted.desc().nullslast())
@@ -238,6 +351,11 @@ def get_jobs():
     else:
         query = query.order_by(Job.date_posted.desc().nullslast(), Job.date_scraped.desc())
     
+    # Optional TARGET_STATES-only view
+    target_only = request.args.get('target_states_only')
+    if target_only == 'true':
+        query = query.filter(Job.in_target_states == True)
+
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     return jsonify({
@@ -432,29 +550,151 @@ def get_search_logs():
     return jsonify([log.to_dict() for log in logs])
 
 
+@app.route('/api/metros/opportunity', methods=['GET'])
+def metros_opportunity():
+    """Location opportunity breakdown for verification metros.
+
+    Query: ?metros=Hartford,Dallas-Fort Worth,Boston
+    """
+    from scrapers.metro_opportunity import get_metro_breakdown, compute_metro_opportunity_scores
+    names = request.args.get('metros', 'Hartford,Dallas-Fort Worth,Boston')
+    name_list = [n.strip() for n in names.split(',') if n.strip()]
+    rebuild = request.args.get('rebuild') == 'true'
+    try:
+        if rebuild:
+            compute_metro_opportunity_scores(db.session)
+        rows = get_metro_breakdown(db.session, name_list)
+        return jsonify({
+            'metros': rows,
+            'formula': (
+                'opportunity = 0.25*normalize(DE_filings/metro_size) '
+                '+ 0.45*(100-normalize(log DE_filings)) '
+                '+ 0.30*(100*(1-top5_employer_share))  '
+                '# density presence + inverse volume + inverse concentration'
+            ),
+            'socs': getattr(Config, 'DE_SOC_CODES', ['15-1243', '15-2051', '15-1211']),
+            'target_states': getattr(Config, 'TARGET_STATES', []),
+        })
+    except AssertionError as e:
+        return jsonify({'error': str(e), 'metros': []}), 409
+    except Exception as e:
+        logger.exception('metro opportunity failed')
+        return jsonify({'error': str(e), 'metros': []}), 500
+
+
+@app.route('/api/locations/unparsed', methods=['GET'])
+def unparsed_locations():
+    from scrapers.location_utils import unparsed_stats
+    rows = UnparsedLocation.query.order_by(UnparsedLocation.hit_count.desc()).limit(50).all()
+    return jsonify({
+        'persisted': [{'location': r.location, 'count': r.hit_count} for r in rows],
+        'memory': unparsed_stats(),
+    })
+
+
+@app.route('/api/config/states', methods=['GET'])
+def get_target_states():
+    return jsonify({
+        'target_states': getattr(Config, 'TARGET_STATES', []),
+        'excluded_states': getattr(Config, 'EXCLUDED_STATES', []),
+        'linkedin_locations': getattr(Config, 'LINKEDIN_LOCATIONS', []),
+    })
+
+
 @app.route('/api/scrape/start', methods=['POST'])
 def start_scrape():
+    """Start a scrape. Default is async (returns immediately); set sync=true for tests."""
     data = request.get_json() or {}
-    sources = data.get('sources') or ['linkedin', 'remoteok', 'themuse']
-    keywords = data.get('keywords') or Config.SEARCH_KEYWORDS[:5]
+    sources = data.get('sources') or [
+        'github_newgrad',
+        'adzuna', 'jsearch', 'ats', 'remoteok', 'themuse', 'arbeitnow', 'remotive',
+    ]
+    # Full-time new-grad keywords only (no intern/co-op set)
+    keywords = data.get('keywords') or list(Config.SEARCH_KEYWORDS[:12])
     locations = data.get('locations') or Config.TARGET_LOCATIONS
-    min_match_score = data.get('min_match_score', 40)
+    min_match_score = data.get('min_match_score', 25)
+    run_sync = bool(data.get('sync'))
 
-    try:
-        from scrapers.job_scraper_manager import JobScraperManager
-        manager = JobScraperManager(db.session, min_match_score=min_match_score)
-        results = manager.scrape_all(sources=sources, keywords=keywords, locations=locations)
-        return jsonify({
-            'message': 'Scraping completed',
-            'results': results
+    if run_sync:
+        try:
+            from scrapers.job_scraper_manager import JobScraperManager
+            manager = JobScraperManager(db.session, min_match_score=min_match_score)
+            results = manager.scrape_all(
+                sources=sources, keywords=keywords, locations=locations,
+            )
+            return jsonify({
+                'message': 'Scraping completed',
+                'status': 'completed',
+                'results': results,
+            })
+        except Exception as e:
+            logger.exception("Scrape failed")
+            return jsonify({
+                'message': 'Scraping failed',
+                'status': 'failed',
+                'error': str(e),
+                'results': {'sources': {}, 'total_new_jobs': 0, 'total_matched_jobs': 0},
+            }), 500
+
+    with _scrape_lock:
+        if _scrape_state['status'] == 'running':
+            return jsonify({
+                'message': 'A scrape is already running',
+                'status': 'running',
+                'progress': dict(_scrape_state.get('progress') or {}),
+            }), 409
+
+        _scrape_state.update({
+            'status': 'running',
+            'message': 'Starting scrape…',
+            'started_at': datetime.now(timezone.utc).isoformat(),
+            'completed_at': None,
+            'progress': {
+                'current_source': None,
+                'sources_done': [],
+                'sources_total': len(sources),
+                'total_new_jobs': 0,
+                'total_matched_jobs': 0,
+            },
+            'results': None,
+            'error': None,
+            'params': {
+                'sources': sources,
+                'keywords': keywords,
+                'locations': locations,
+                'min_match_score': min_match_score,
+            },
         })
-    except Exception as e:
-        logger.exception("Scrape failed")
-        return jsonify({
-            'message': 'Scraping failed',
-            'error': str(e),
-            'results': {'sources': {}, 'total_new_jobs': 0, 'total_matched_jobs': 0}
-        }), 500
+
+    thread = threading.Thread(
+        target=_run_scrape_job,
+        args=(sources, keywords, locations, min_match_score),
+        daemon=True,
+        name='job-scrape',
+    )
+    thread.start()
+
+    return jsonify({
+        'message': 'Scraping started',
+        'status': 'running',
+        'sources': sources,
+    }), 202
+
+
+@app.route('/api/scrape/status', methods=['GET'])
+def scrape_status():
+    """Poll background scrape progress."""
+    with _scrape_lock:
+        payload = {
+            'status': _scrape_state['status'],
+            'message': _scrape_state['message'],
+            'started_at': _scrape_state['started_at'],
+            'completed_at': _scrape_state['completed_at'],
+            'progress': dict(_scrape_state.get('progress') or {}),
+            'error': _scrape_state.get('error'),
+            'results': _scrape_state.get('results'),
+        }
+    return jsonify(payload)
 
 
 @app.route('/api/config/locations', methods=['GET'])

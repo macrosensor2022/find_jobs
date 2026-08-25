@@ -11,7 +11,9 @@ const state = {
         location: '',
         status: '',
         dateFilter: '',
-        search: ''
+        search: '',
+        sortBy: 'rank_score',
+        targetStatesOnly: false,
     }
 };
 
@@ -190,11 +192,14 @@ async function loadJobs() {
         const params = new URLSearchParams({
             page: state.currentPage,
             per_page: 20,
+            // Profile-aligned ranking: best LinkedIn match first
+            sort_by: state.filters.sortBy || 'rank_score',
             ...(state.filters.source && { source: state.filters.source }),
             ...(state.filters.location && { location: state.filters.location }),
             ...(state.filters.status && { status: state.filters.status }),
             ...(state.filters.dateFilter && { date_filter: state.filters.dateFilter }),
-            ...(state.filters.search && { search: state.filters.search })
+            ...(state.filters.search && { search: state.filters.search }),
+            ...(state.filters.targetStatesOnly && { target_states_only: 'true' }),
         });
         
         const data = await fetchAPI(`/jobs?${params}`);
@@ -203,8 +208,34 @@ async function loadJobs() {
         
         renderJobList('jobsList', state.jobs);
         renderPagination();
+        loadMetroBreakdown();
     } catch (error) {
         console.error('Error loading jobs:', error);
+    }
+}
+
+async function loadMetroBreakdown() {
+    const el = document.getElementById('metroOpportunityPanel');
+    if (!el) return;
+    try {
+        const data = await fetchAPI('/metros/opportunity?metros=Hartford,Dallas-Fort Worth,Boston');
+        if (data.error) {
+            el.innerHTML = `<p class="empty-state">${escapeHtml(data.error)}</p>`;
+            return;
+        }
+        el.innerHTML = (data.metros || []).map(m => {
+            if (m.error) return `<div class="metro-row"><strong>${escapeHtml(m.metro_name)}</strong>: ${escapeHtml(m.error)}</div>`;
+            return `<div class="metro-row">
+                <strong>${escapeHtml(m.metro_name || '')}</strong>
+                <span class="metro-flag">${escapeHtml(m.flag || '')}</span>
+                density ${m.sponsor_density ?? '—'} ·
+                concentration ${m.concentration_penalty ?? '—'} ·
+                <em>opportunity ${m.location_opportunity_score ?? '—'}</em>
+                · filings ${m.de_filing_count ?? 0}
+            </div>`;
+        }).join('') + `<p class="metro-formula">${escapeHtml(data.formula || '')}</p>`;
+    } catch (e) {
+        el.innerHTML = '<p class="empty-state">Metro scores unavailable — load LCA data first</p>';
     }
 }
 
@@ -257,6 +288,8 @@ function renderJobList(containerId, jobs) {
                 </div>
             </div>
             ${job.match_score ? `<span class="match-badge ${getMatchLevel(job.match_score)}">${job.match_score}% Match</span>` : ''}
+            ${job.location_opportunity_score != null ? `<span class="match-badge medium" title="Location opportunity">Loc ${Math.round(job.location_opportunity_score)}</span>` : ''}
+            ${job.rank_score != null ? `<span class="match-badge high" title="Blended rank">Rank ${Math.round(job.rank_score)}</span>` : ''}
             <span class="source-badge ${job.source}">${job.source}</span>
             <div class="job-actions">
                 <button class="action-btn ${job.is_favorite ? 'favorited' : ''}"
@@ -364,6 +397,15 @@ function initFilters() {
         state.currentPage = 1;
         loadJobs();
     });
+
+    const sortEl = document.getElementById('sortFilter');
+    if (sortEl) {
+        sortEl.addEventListener('change', (e) => {
+            state.filters.sortBy = e.target.value || 'rank_score';
+            state.currentPage = 1;
+            loadJobs();
+        });
+    }
     
     document.getElementById('locationFilter').addEventListener('change', (e) => {
         state.filters.location = e.target.value;
@@ -384,7 +426,7 @@ function initFilters() {
     });
     
     document.getElementById('clearFilters').addEventListener('click', () => {
-        state.filters = { source: '', location: '', status: '', dateFilter: '', search: '' };
+        state.filters = { source: '', location: '', status: '', dateFilter: '', search: '', sortBy: 'rank_score', targetStatesOnly: false };
         state.currentPage = 1;
         document.getElementById('sourceFilter').value = '';
         document.getElementById('locationFilter').value = '';
@@ -598,7 +640,7 @@ function initScraper() {
         const sources = Array.from(document.querySelectorAll('input[name="source"]:checked')).map(i => i.value);
         const keywords = Array.from(document.querySelectorAll('input[name="keyword"]:checked')).map(i => i.value);
         const locations = Array.from(document.querySelectorAll('input[name="location"]:checked')).map(i => i.value);
-        const minMatchScore = parseInt(document.getElementById('minMatchScore')?.value || '40');
+        const minMatchScore = parseInt(document.getElementById('minMatchScore')?.value || '30');
         
         if (!sources.length || !keywords.length) {
             alert('Please select at least one source and keyword');
@@ -610,80 +652,166 @@ function initScraper() {
         const startBtn = document.getElementById('startScrape');
         
         statusEl.style.display = 'block';
-        document.getElementById('statusText').textContent = 'Scraping full-time jobs and scoring OPT fit...';
+        document.getElementById('statusText').textContent = 'Starting scrape in background…';
         resultsEl.style.display = 'none';
         startBtn.disabled = true;
         
         try {
-            const result = await fetchAPI('/scrape/start', {
+            const start = await fetchAPI('/scrape/start', {
                 method: 'POST',
                 body: JSON.stringify({ sources, keywords, locations, min_match_score: minMatchScore })
             });
-            
-            statusEl.style.display = 'none';
-            resultsEl.style.display = 'block';
 
-            const viewFreshJobs = () => {
-                state.filters.dateFilter = 'today';
-                if (sources.length === 1) {
-                    state.filters.source = sources[0];
-                    const sourceSelect = document.getElementById('sourceFilter');
-                    if (sourceSelect) sourceSelect.value = sources[0];
-                } else {
-                    state.filters.source = '';
-                    const sourceSelect = document.getElementById('sourceFilter');
-                    if (sourceSelect) sourceSelect.value = '';
+            if (start.status === 'completed' && start.results) {
+                renderScrapeResults(start.results, sources, minMatchScore);
+                startBtn.disabled = false;
+                return;
+            }
+
+            // Poll until finished; refresh jobs periodically so new rows appear live
+            let lastJobsRefresh = 0;
+            const poll = async () => {
+                try {
+                    const st = await fetchAPI('/scrape/status');
+                    const msg = st.message || 'Scraping…';
+                    const prog = st.progress || {};
+                    const done = (prog.sources_done || []).length;
+                    const total = prog.sources_total || sources.length;
+                    document.getElementById('statusText').textContent =
+                        `${msg} (${done}/${total} sources · ${prog.total_new_jobs || 0} new)`;
+
+                    const now = Date.now();
+                    if (now - lastJobsRefresh > 8000) {
+                        lastJobsRefresh = now;
+                        try {
+                            if (typeof loadJobs === 'function') await loadJobs();
+                            if (typeof loadDashboard === 'function') await loadDashboard();
+                        } catch (_) { /* ignore mid-scrape refresh errors */ }
+                    }
+
+                    if (st.status === 'running') {
+                        setTimeout(poll, 2000);
+                        return;
+                    }
+
+                    statusEl.style.display = 'none';
+                    startBtn.disabled = false;
+
+                    if (st.status === 'failed') {
+                        alert('Scraping failed: ' + (st.error || st.message || 'unknown error'));
+                        if (st.results) {
+                            renderScrapeResults(st.results, sources, minMatchScore);
+                        }
+                        return;
+                    }
+
+                    const results = st.results || {
+                        sources: {},
+                        total_new_jobs: 0,
+                        total_matched_jobs: 0,
+                    };
+                    renderScrapeResults(results, sources, minMatchScore);
+                } catch (pollErr) {
+                    console.error(pollErr);
+                    document.getElementById('statusText').textContent =
+                        'Waiting for scrape status… (retrying)';
+                    setTimeout(poll, 3000);
                 }
-                const dateSelect = document.getElementById('dateFilter');
-                if (dateSelect) dateSelect.value = 'today';
-                switchView('jobs');
             };
-            
-            document.getElementById('resultsContent').innerHTML = `
-                <p><strong>Total New Jobs (${minMatchScore}%+ match):</strong> ${result.results.total_new_jobs}</p>
-                <p><strong>Total Matched Jobs:</strong> ${result.results.total_matched_jobs || 0}</p>
-                <p><strong>Match Output Rate:</strong> ${calculateOutputRate(result.results)}%</p>
-                <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn btn-primary" id="viewFreshJobsBtn">
-                        <i class="fas fa-bolt"></i>
-                        View Fresh Jobs (Last 24 Hours)
-                    </button>
-                    <button class="btn btn-secondary" id="viewAllJobsBtn">
-                        <i class="fas fa-list"></i>
-                        View All Jobs
-                    </button>
-                </div>
-                <div style="margin-top: 12px;">
-                    ${Object.entries(result.results.sources || {}).map(([source, data]) => `
-                        <div style="padding: 8px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 8px;">
-                            <strong>${capitalizeFirst(source)}:</strong> 
-                            ${data.new_jobs || 0} new jobs
-                            ${data.matched_jobs ? `(${data.matched_jobs} matched)` : ''}
-                            ${data.error ? `<br><small style="color: var(--warning);">${data.error}</small>` : ''}
-                            ${data.errors?.length ? `<br><small style="color: var(--danger);">Errors: ${data.errors.length}</small>` : ''}
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-
-            document.getElementById('viewFreshJobsBtn')?.addEventListener('click', (e) => {
-                e.preventDefault();
-                viewFreshJobs();
-            });
-            document.getElementById('viewAllJobsBtn')?.addEventListener('click', (e) => {
-                e.preventDefault();
-                state.filters.dateFilter = '';
-                const dateSelect = document.getElementById('dateFilter');
-                if (dateSelect) dateSelect.value = '';
-                switchView('jobs');
-            });
+            setTimeout(poll, 1500);
         } catch (error) {
+            if (error.status === 409) {
+                document.getElementById('statusText').textContent = 'Scrape already running…';
+                statusEl.style.display = 'block';
+                startBtn.disabled = true;
+                const resume = async () => {
+                    try {
+                        const st = await fetchAPI('/scrape/status');
+                        document.getElementById('statusText').textContent = st.message || 'Scraping…';
+                        if (st.status === 'running') {
+                            setTimeout(resume, 2000);
+                            return;
+                        }
+                        statusEl.style.display = 'none';
+                        startBtn.disabled = false;
+                        if (st.results) renderScrapeResults(st.results, sources, minMatchScore);
+                    } catch (_) {
+                        setTimeout(resume, 3000);
+                    }
+                };
+                setTimeout(resume, 1500);
+                return;
+            }
             statusEl.style.display = 'none';
+            startBtn.disabled = false;
             alert('Error during scraping: ' + error.message);
         }
-        
-        startBtn.disabled = false;
     });
+}
+
+function renderScrapeResults(results, sources, minMatchScore) {
+    const statusEl = document.getElementById('scraperStatus');
+    const resultsEl = document.getElementById('scraperResults');
+    statusEl.style.display = 'none';
+    resultsEl.style.display = 'block';
+
+    const viewFreshJobs = () => {
+        state.filters.dateFilter = 'week';
+        if (sources.length === 1) {
+            state.filters.source = sources[0];
+            const sourceSelect = document.getElementById('sourceFilter');
+            if (sourceSelect) sourceSelect.value = sources[0];
+        } else {
+            state.filters.source = '';
+            const sourceSelect = document.getElementById('sourceFilter');
+            if (sourceSelect) sourceSelect.value = '';
+        }
+        const dateSelect = document.getElementById('dateFilter');
+        if (dateSelect) dateSelect.value = 'week';
+        switchView('jobs');
+    };
+
+    document.getElementById('resultsContent').innerHTML = `
+        <p><strong>Total New Jobs (${minMatchScore}%+ match):</strong> ${results.total_new_jobs || 0}</p>
+        <p><strong>Total Matched Jobs:</strong> ${results.total_matched_jobs || 0}</p>
+        <p><strong>Match Output Rate:</strong> ${calculateOutputRate(results)}%</p>
+        <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="btn btn-primary" id="viewFreshJobsBtn">
+                <i class="fas fa-bolt"></i>
+                View Fresh Jobs (Last 7 Days)
+            </button>
+            <button class="btn btn-secondary" id="viewAllJobsBtn">
+                <i class="fas fa-list"></i>
+                View All Jobs
+            </button>
+        </div>
+        <div style="margin-top: 12px;">
+            ${Object.entries(results.sources || {}).map(([source, data]) => `
+                <div style="padding: 8px; background: var(--bg-primary); border-radius: 8px; margin-bottom: 8px;">
+                    <strong>${capitalizeFirst(source)}:</strong>
+                    ${data.new_jobs || 0} new
+                    ${data.matched_jobs != null ? `(${data.matched_jobs} matched / ${data.total_found || 0} found)` : ''}
+                    ${data.error ? `<br><small style="color: var(--warning);">${escapeHtml(data.error)}</small>` : ''}
+                    ${data.errors?.length ? `<br><small style="color: var(--danger);">Errors: ${data.errors.length}</small>` : ''}
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    document.getElementById('viewFreshJobsBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        viewFreshJobs();
+    });
+    document.getElementById('viewAllJobsBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        state.filters.dateFilter = '';
+        const dateSelect = document.getElementById('dateFilter');
+        if (dateSelect) dateSelect.value = '';
+        switchView('jobs');
+    });
+
+    // Auto-open fresh jobs so new data is visible without an extra click
+    viewFreshJobs();
 }
 
 function initProfile() {
@@ -739,12 +867,22 @@ async function fetchAPI(endpoint, options = {}) {
     };
     
     const response = await fetch(url, config);
-    
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (_) {
+        data = null;
+    }
+
     if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const detail = (data && (data.error || data.message)) || `API error: ${response.status}`;
+        const err = new Error(detail);
+        err.status = response.status;
+        err.data = data;
+        throw err;
     }
     
-    return response.json();
+    return data;
 }
 
 function getCompanyInitials(company) {

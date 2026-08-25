@@ -53,6 +53,21 @@ class Job(db.Model):
     employer_match_conf = db.Column(db.Float, nullable=True)
     freshness_hours = db.Column(db.Integer, nullable=True)
     opt_fit_score = db.Column(db.Integer, nullable=True)
+
+    # Location / metro opportunity
+    worksite_city = db.Column(db.String(255), nullable=True)
+    worksite_state = db.Column(db.String(10), nullable=True)
+    metro = db.Column(db.String(255), nullable=True)
+    metro_code = db.Column(db.String(16), nullable=True)
+    location_opportunity_score = db.Column(db.Float, nullable=True)
+    competition_score = db.Column(db.Float, nullable=True)
+    rank_score = db.Column(db.Float, nullable=True)
+    in_target_states = db.Column(db.Boolean, nullable=True)
+    required_years = db.Column(db.Float, nullable=True)
+    exp_hard_drop = db.Column(db.Boolean, nullable=True)
+    market = db.Column(db.String(8), nullable=True)  # US | IN
+    salary_predicted = db.Column(db.Boolean, nullable=True)
+    description_partial = db.Column(db.Boolean, nullable=True)
     
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -87,6 +102,19 @@ class Job(db.Model):
             'employer_match_conf': self.employer_match_conf,
             'freshness_hours': self.freshness_hours,
             'opt_fit_score': self.opt_fit_score,
+            'worksite_city': self.worksite_city,
+            'worksite_state': self.worksite_state,
+            'metro': self.metro,
+            'metro_code': self.metro_code,
+            'location_opportunity_score': self.location_opportunity_score,
+            'competition_score': self.competition_score,
+            'rank_score': self.rank_score,
+            'in_target_states': self.in_target_states,
+            'required_years': self.required_years,
+            'exp_hard_drop': self.exp_hard_drop,
+            'market': self.market,
+            'salary_predicted': self.salary_predicted,
+            'description_partial': self.description_partial,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
@@ -220,3 +248,82 @@ class SponsorHistory(db.Model):
             'median_wage': self.median_wage,
             'prevailing_wage_level': self.prevailing_wage_level,
         }
+
+
+class MetroSocLca(db.Model):
+    """Aggregate DOL LCA filings by CBSA metro × SOC × fiscal year."""
+    __tablename__ = 'metro_soc_lca'
+    __table_args__ = (
+        db.Index('idx_metro_soc_year', 'metro_code', 'soc_code', 'fiscal_year'),
+        db.Index('idx_metro_soc_metro', 'metro_code'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    metro_code = db.Column(db.String(16), nullable=False)
+    metro_name = db.Column(db.String(255), nullable=False)
+    soc_code = db.Column(db.String(16), nullable=False)
+    fiscal_year = db.Column(db.Integer, nullable=False)
+    filing_count = db.Column(db.Integer, default=0)
+    employer_count = db.Column(db.Integer, default=0)
+    top5_employer_share = db.Column(db.Float, default=0.0)  # 0.0–1.0
+    metro_size_proxy = db.Column(db.Integer, default=0)  # all-SOC filings in metro/FY
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'metro_code': self.metro_code,
+            'metro_name': self.metro_name,
+            'soc_code': self.soc_code,
+            'fiscal_year': self.fiscal_year,
+            'filing_count': self.filing_count,
+            'employer_count': self.employer_count,
+            'top5_employer_share': self.top5_employer_share,
+            'metro_size_proxy': self.metro_size_proxy,
+        }
+
+
+class MetroOpportunity(db.Model):
+    """Precomputed location opportunity score per metro (DE SOCs, last 3 FY)."""
+    __tablename__ = 'metro_opportunity'
+    __table_args__ = (
+        db.Index('idx_metro_opp_code', 'metro_code', unique=True),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    metro_code = db.Column(db.String(16), nullable=False)
+    metro_name = db.Column(db.String(255), nullable=False)
+    sponsor_density = db.Column(db.Float)       # 0–100 normalized
+    concentration_penalty = db.Column(db.Float) # 0–100 (top5 share * 100)
+    location_opportunity_score = db.Column(db.Float)  # density − penalty
+    de_filing_count = db.Column(db.Integer, default=0)
+    employer_count = db.Column(db.Integer, default=0)
+    top5_employer_share = db.Column(db.Float, default=0.0)
+    flag = db.Column(db.String(64), nullable=True)  # high_opportunity / high_competition
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'metro_code': self.metro_code,
+            'metro_name': self.metro_name,
+            'sponsor_density': self.sponsor_density,
+            'concentration_penalty': self.concentration_penalty,
+            'location_opportunity_score': self.location_opportunity_score,
+            'de_filing_count': self.de_filing_count,
+            'employer_count': self.employer_count,
+            'top5_employer_share': self.top5_employer_share,
+            'flag': self.flag,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class UnparsedLocation(db.Model):
+    __tablename__ = 'unparsed_location'
+    __table_args__ = (
+        db.Index('idx_unparsed_loc', 'location', unique=True),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    location = db.Column(db.String(255), nullable=False)
+    hit_count = db.Column(db.Integer, default=0)
+    last_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                          onupdate=lambda: datetime.now(timezone.utc))

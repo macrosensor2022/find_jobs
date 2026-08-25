@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "id": "us-1001",
+      "title": "Data Engineer (New Grad)",
+      "description": "Build ETL pipelines with Python and SQL. Entry level…",
+      "created": "2026-08-18T12:00:00Z",
+      "redirect_url": "https://www.adzuna.com/details/us-1001",
+      "salary_min": 85000,
+      "salary_max": 105000,
+      "salary_is_predicted": "1",
+      "company": {"display_name": "Acme Analytics"},
+      "location": {
+        "display_name": "Boston, Massachusetts",
+        "area": ["US", "Massachusetts", "Boston"]
+      }
+    },
+    {
+      "id": "in-2002",
+      "title": "Data Engineer",
+      "description": "SSIS / SQL Server data engineer role in India…",
+      "created": "2026-08-17T09:30:00Z",
+      "redirect_url": "https://www.adzuna.com/details/in-2002",
+      "salary_min": 1200000,
+      "salary_max": 1800000,
+      "salary_is_predicted": "0",
+      "company": {"display_name": "Infosys"},
+      "location": {
+        "display_name": "Bengaluru, Karnataka",
+        "area": ["India", "Karnataka", "Bengaluru"]
+      }
+    }
+  ]
+}

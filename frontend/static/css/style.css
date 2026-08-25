@@ -1193,3 +1193,31 @@ body {
     color: white;
     border-radius: 10px;
 }
+
+.metro-opportunity-panel {
+    margin: 12px 0 20px;
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+.metro-opportunity-panel .metro-row {
+    margin: 6px 0;
+    color: var(--text-primary);
+}
+.metro-opportunity-panel .metro-flag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    font-size: 0.75rem;
+    color: var(--primary-light);
+}
+.metro-opportunity-panel .metro-formula {
+    margin-top: 10px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}

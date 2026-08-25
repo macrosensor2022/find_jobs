@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+import os
 import requests
 import certifi
 from bs4 import BeautifulSoup
@@ -14,53 +15,32 @@ logger = logging.getLogger(__name__)
 
 def _build_ssl_context():
     """
-    Build an SSL context that works across environments.
+    Build an SSL verify setting for requests.Session.
 
-    Strategy (try in order, first success wins):
-    1. `truststore` — uses the OS native trust store. Can trigger
-       RecursionError on some Windows / Python 3.13 configurations.
-    2. `certifi` — vendored Mozilla CA bundle.
-    3. Disable verification — last resort when the system trust store
-       has certs Python's strict validation rejects (e.g. BasicConstraints
-       not marked critical). Logs a warning.
+    Do NOT use truststore.inject_into_ssl() — on several Windows / Python
+    setups it passes a local context probe but then raises
+    RecursionError on every real HTTPS call (which zeroed out all scrapes).
 
-    Returns a value for `requests.Session.verify`.
+    Prefer certifi's CA bundle; fall back to verify=False for local dev.
     """
-    _ts = None
-    # --- attempt 1: truststore ---
+    # If a previous import injected truststore, try to undo it
     try:
         import truststore as _ts
-        _ts.inject_into_ssl()
-        requests.head('https://www.google.com', timeout=10)
-        logger.info("SSL: using OS native trust store (truststore)")
-        return True
+        try:
+            _ts.extract_from_ssl()
+        except Exception:
+            pass
     except ImportError:
-        logger.debug("truststore not installed")
-    except RecursionError:
-        logger.warning("truststore caused RecursionError, reverting")
-        if _ts:
-            try:
-                _ts.extract_from_ssl()
-            except Exception:
-                pass
-    except Exception as e:
-        logger.warning(f"truststore failed ({e}), reverting")
-        if _ts:
-            try:
-                _ts.extract_from_ssl()
-            except Exception:
-                pass
+        pass
 
-    # --- attempt 2: certifi bundle (test against a real scraper target) ---
     try:
         ca_path = certifi.where()
-        requests.head('https://remoteok.com', verify=ca_path, timeout=10)
-        logger.info("SSL: using certifi CA bundle")
-        return ca_path
+        if ca_path and os.path.exists(ca_path):
+            logger.info("SSL: using certifi CA bundle")
+            return ca_path
     except Exception as e:
-        logger.warning(f"certifi verification also failed ({e})")
+        logger.warning(f"certifi setup failed ({e})")
 
-    # --- attempt 3: no verification (local-dev fallback) ---
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     logger.warning(
@@ -74,6 +54,22 @@ def _build_ssl_context():
 _SSL_VERIFY = _build_ssl_context()
 
 
+def _is_non_retryable(exc: Exception) -> bool:
+    """DNS / connection-name failures won't heal with sleep — fail fast."""
+    if isinstance(exc, RecursionError):
+        return True
+    msg = str(exc).lower()
+    markers = (
+        'getaddrinfo failed',
+        'nameresolutionerror',
+        'failed to resolve',
+        'nodename nor servname',
+        'name or service not known',
+        'maximum recursion depth exceeded',
+    )
+    return any(m in msg for m in markers)
+
+
 def retry_on_failure(max_retries=3, backoff_factor=1.0):
     """Decorator to retry a function on failure with exponential backoff"""
     def decorator(func):
@@ -85,6 +81,9 @@ def retry_on_failure(max_retries=3, backoff_factor=1.0):
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
+                    if _is_non_retryable(e):
+                        logger.error(f"Non-retryable network error (giving up): {e}")
+                        raise
                     if attempt < max_retries - 1:
                         wait_time = backoff_factor * (2 ** attempt)
                         logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
@@ -107,6 +106,20 @@ class BaseScraper(ABC):
             'Connection': 'keep-alive',
         })
         self.source_name = "base"
+
+    def safe_get(self, url: str, **kwargs):
+        """GET with SSL fallback (RecursionError / cert verify failures)."""
+        timeout = kwargs.pop('timeout', 30)
+        try:
+            return self.session.get(url, timeout=timeout, **kwargs)
+        except (RecursionError, requests.exceptions.SSLError) as e:
+            logger.warning(
+                "SSL issue on GET (%s) — retrying once with verify=False", e
+            )
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            self.session.verify = False
+            return self.session.get(url, timeout=timeout, verify=False, **kwargs)
     
     @abstractmethod
     def search_jobs(self, keyword: str, location: str, page: int = 1) -> list:
@@ -116,11 +129,11 @@ class BaseScraper(ABC):
     def parse_job_listing(self, listing) -> dict:
         pass
     
-    @retry_on_failure(max_retries=3, backoff_factor=1.0)
+    @retry_on_failure(max_retries=3, backoff_factor=3.0)
     def get_page(self, url: str) -> BeautifulSoup:
-        time.sleep(random.uniform(1, 3))
+        time.sleep(random.uniform(2, 5))
         try:
-            response = self.session.get(url, timeout=30)
+            response = self.safe_get(url, timeout=30)
             response.raise_for_status()
             return BeautifulSoup(response.text, 'html.parser')
         except requests.exceptions.Timeout:
@@ -144,6 +157,9 @@ class BaseScraper(ABC):
             'date_posted': kwargs.get('date_posted'),
             'is_remote': kwargs.get('is_remote', False),
             'external_id': kwargs.get('external_id', ''),
+            'market': kwargs.get('market'),
+            'salary_predicted': kwargs.get('salary_predicted'),
+            'description_partial': kwargs.get('description_partial', False),
         }
     
     def parse_relative_date(self, date_str: str) -> datetime:

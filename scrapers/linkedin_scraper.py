@@ -19,40 +19,53 @@ class LinkedInScraper(BaseScraper):
         self.base_url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
     def search_jobs(self, keyword: str, location: str = 'United States', page: int = 1) -> list:
-        jobs = []
-        start = (page - 1) * 25
-
+        """Search LinkedIn for both full-time and internship/co-op listings."""
         if not location:
             location = 'United States'
 
-        params = {
-            'keywords': keyword,
-            'location': location,
-            'f_TPR': 'r604800',       # Past week (relaxed from 24h for full-time cycles)
-            'f_E': '1',               # Entry level
-            'f_JT': 'F',              # Full-time (was 'I' for internship)
-            'start': start,
-            'sortBy': 'DD',           # Sort by date
-            'geoId': '103644278',     # United States geoId
-        }
+        # Rotate job types: F=full-time, I=internship, ''=any (catches co-op)
+        from config.settings import Config
+        job_types = getattr(Config, 'LINKEDIN_JOB_TYPES', ['F', 'I', ''])
 
-        url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
+        seen_ids = set()
+        jobs = []
+        start = (page - 1) * 25
 
-        soup = self.get_page(url)
-        if not soup:
-            return jobs
+        for jt in job_types:
+            params = {
+                'keywords': keyword,
+                'location': location,
+                'f_TPR': 'r604800',       # Past week
+                'f_E': '1,2',             # Entry + Associate
+                'start': start,
+                'sortBy': 'DD',
+                'geoId': '103644278',
+            }
+            if jt:
+                params['f_JT'] = jt
 
-        job_cards = soup.find_all('div', class_='base-card')
-
-        for card in job_cards:
-            try:
-                job_data = self.parse_job_listing(card)
-                if not job_data:
-                    continue
-                jobs.append(job_data)
-            except Exception as e:
-                print(f"Error parsing LinkedIn job: {e}")
+            url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
+            soup = self.get_page(url)
+            if not soup:
                 continue
+
+            for card in soup.find_all('div', class_='base-card'):
+                try:
+                    job_data = self.parse_job_listing(card)
+                    if not job_data:
+                        continue
+                    eid = job_data.get('external_id') or job_data.get('job_url')
+                    if eid and eid in seen_ids:
+                        continue
+                    if eid:
+                        seen_ids.add(eid)
+                    # Tag internship searches
+                    if jt == 'I' and not job_data.get('job_type'):
+                        job_data['job_type'] = 'internship'
+                    jobs.append(job_data)
+                except Exception as e:
+                    print(f"Error parsing LinkedIn job: {e}")
+                    continue
 
         if jobs:
             print(f"LinkedIn: Found {len(jobs)} jobs for '{keyword}' in '{location}'")

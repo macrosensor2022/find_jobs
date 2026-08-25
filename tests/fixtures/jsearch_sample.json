@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "job_id": "js-9001",
+      "job_title": "Junior Data Engineer",
+      "employer_name": "ZipRecruiter Mirror Co",
+      "job_city": "Austin",
+      "job_state": "TX",
+      "job_country": "US",
+      "job_apply_link": "https://example.com/apply/js-9001",
+      "job_posted_at_datetime_utc": "2026-08-19T15:00:00.000Z",
+      "job_description": "Python, SQL, Azure data pipelines. Early career welcome.",
+      "job_min_salary": 90000,
+      "job_max_salary": 110000,
+      "job_is_remote": false
+    },
+    {
+      "job_id": "js-9002",
+      "job_title": "Data Engineer Intern",
+      "employer_name": "TCS",
+      "job_city": "Hyderabad",
+      "job_state": "Telangana",
+      "job_country": "IN",
+      "job_apply_link": "https://example.com/apply/js-9002",
+      "job_posted_at_datetime_utc": "2026-08-18T10:00:00.000Z",
+      "job_description": "Internship building ETL with Python and SQL.",
+      "job_min_salary": null,
+      "job_max_salary": null,
+      "job_is_remote": false
+    }
+  ]
+}

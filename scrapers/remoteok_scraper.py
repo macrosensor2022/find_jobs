@@ -85,7 +85,7 @@ class RemoteOKScraper(BaseScraper):
         try:
             time.sleep(1)
 
-            response = self.session.get(self.api_url, timeout=30)
+            response = self.safe_get(self.api_url, timeout=30)
             response.raise_for_status()
 
             data = response.json()

@@ -158,34 +158,48 @@
                     <div class="filter-group">
                         <select id="sourceFilter" class="filter-select">
                             <option value="">All Sources</option>
+                            <option value="github_newgrad">GitHub New Grad</option>
+                            <option value="github_intern">GitHub Intern</option>
                             <option value="linkedin">LinkedIn</option>
+                            <option value="adzuna">Adzuna</option>
+                            <option value="jsearch">JSearch</option>
+                            <option value="ats">ATS</option>
+                            <option value="greenhouse">Greenhouse</option>
+                            <option value="lever">Lever</option>
+                            <option value="ashby">Ashby</option>
                             <option value="remoteok">RemoteOK</option>
                             <option value="themuse">The Muse</option>
                             <option value="remotive">Remotive</option>
                             <option value="arbeitnow">Arbeitnow</option>
                             <option value="manual">Manual</option>
                         </select>
+                        <select id="sortFilter" class="filter-select">
+                            <option value="rank_score">Rank (match + location)</option>
+                            <option value="match_score">Match score</option>
+                            <option value="location_opportunity">Location opportunity</option>
+                            <option value="freshness">Freshest</option>
+                            <option value="date">Date posted</option>
+                        </select>
                         <select id="locationFilter" class="filter-select">
                             <option value="">All Locations</option>
                             <option value="Boston">Boston</option>
                             <option value="Portland">Portland, ME</option>
-                            <option value="New York">New York</option>
+                            <option value="Hartford">Hartford</option>
+                            <option value="Dallas">Dallas</option>
+                            <option value="Charlotte">Charlotte</option>
+                            <option value="Columbus">Columbus</option>
+                            <option value="Austin">Austin</option>
+                            <option value="Nashville">Nashville</option>
+                            <option value="Denver">Denver</option>
+                            <option value="Phoenix">Phoenix</option>
                             <option value="Remote">Remote</option>
-                            <option value="Massachusetts">Massachusetts</option>
                             <option value="Maine">Maine</option>
                             <option value="Texas">Texas</option>
-                            <option value="California">California</option>
-                            <option value="New Jersey">New Jersey</option>
-                            <option value="Colorado">Colorado</option>
-                            <option value="Washington">Washington</option>
-                            <option value="Illinois">Illinois</option>
-                            <option value="Virginia">Virginia</option>
-                            <option value="Georgia">Georgia</option>
-                            <option value="Pennsylvania">Pennsylvania</option>
-                            <option value="Ohio">Ohio</option>
-                            <option value="Michigan">Michigan</option>
-                            <option value="Utah">Utah</option>
+                            <option value="Connecticut">Connecticut</option>
+                            <option value="Massachusetts">Massachusetts</option>
                             <option value="North Carolina">North Carolina</option>
+                            <option value="Ohio">Ohio</option>
+                            <option value="New Jersey">New Jersey</option>
                         </select>
                         <select id="dateFilter" class="filter-select">
                             <option value="">All Time</option>
@@ -208,6 +222,10 @@
                     </button>
                 </div>
                 
+                <div class="metro-opportunity-panel" id="metroOpportunityPanel">
+                    <p class="empty-state">Loading metro opportunity scores…</p>
+                </div>
+
                 <div class="jobs-container">
                     <div class="job-list" id="jobsList"></div>
                     <div class="pagination" id="pagination"></div>
@@ -252,8 +270,24 @@
                                     <label>Active Sources</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="source" value="linkedin" checked>
-                                            <span>LinkedIn (Full-time, Past Week)</span>
+                                            <input type="checkbox" name="source" value="github_newgrad" checked>
+                                            <span>GitHub New Grad FT (SimplifyJobs)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="github_intern">
+                                            <span>GitHub Internships (optional)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="adzuna" checked>
+                                            <span>Adzuna (US + India API)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="jsearch" checked>
+                                            <span>JSearch (fresh + India)</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="ats" checked>
+                                            <span>ATS boards (Greenhouse/Lever/Ashby)</span>
                                         </label>
                                         <label class="checkbox-label">
                                             <input type="checkbox" name="source" value="remoteok" checked>
@@ -271,7 +305,14 @@
                                             <input type="checkbox" name="source" value="arbeitnow">
                                             <span>Arbeitnow (mostly EU, strict USA filter)</span>
                                         </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="source" value="linkedin">
+                                            <span>LinkedIn (slow — runs last; past week)</span>
+                                        </label>
                                     </div>
+                                    <p class="info-text" style="margin-top: 8px;">
+                                        Tuned for <strong>full-time new-grad</strong> roles (co-op/intern dropped). GitHub New Grad needs no keys.
+                                    </p>
                                 </div>
                                 
                                 <div class="form-group">
@@ -358,22 +399,22 @@
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>Keywords — New Grad / Entry Level</label>
+                                    <label>Keywords — New Grad / Entry Level (full-time)</label>
                                     <div class="checkbox-group">
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="New Grad Data Engineer">
+                                            <input type="checkbox" name="keyword" value="New Grad Data Engineer" checked>
                                             <span>New Grad Data Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="New Grad Data Scientist">
+                                            <input type="checkbox" name="keyword" value="New Grad Data Scientist" checked>
                                             <span>New Grad Data Scientist</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Entry Level Data Engineer">
+                                            <input type="checkbox" name="keyword" value="Entry Level Data Engineer" checked>
                                             <span>Entry Level Data Engineer</span>
                                         </label>
                                         <label class="checkbox-label">
-                                            <input type="checkbox" name="keyword" value="Junior Data Engineer">
+                                            <input type="checkbox" name="keyword" value="Junior Data Engineer" checked>
                                             <span>Junior Data Engineer</span>
                                         </label>
                                     </div>
@@ -473,7 +514,7 @@
                                 </button>
                                 <p class="info-text" style="margin-top: 10px;">
                                     <i class="fas fa-bolt"></i>
-                                    Tip: after scraping, use <strong>View Fresh Jobs</strong> to auto-filter to the last 24 hours.
+                                    Scrapes run in the background — the site stays usable. When done, jobs refresh automatically (last 7 days).
                                 </p>
                             </div>
                             

@@ -73,6 +73,26 @@ the column or extend the `_EV_NAME` / `_LCA_NAME` lists in
 
 ---
 
+## 4. Census CBSA Crosswalk (city → metro)
+
+| Field | Value |
+|-------|-------|
+| **Publisher** | U.S. Census Bureau |
+| **URL** | https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/delineation-files.html |
+| **File** | List 2 — Principal Cities of Metropolitan and Micropolitan Statistical Areas (July 2023) |
+| **Local path** | `data/list2_2023.xlsx` |
+| **Used for** | Canonical city/state → CBSA metro mapping for location opportunity scoring |
+
+```bash
+# After placing list2_2023.xlsx and DOL LCA XLSX under data/:
+python -m scrapers.sponsorship_data --load-lca data/LCA_Dislclosure_Data_FY2026_Q2.xlsx --rebuild-opportunity
+python scripts/show_metro_opportunity.py
+```
+
+DE SOCs scored: `15-1243`, `15-2051`, `15-1211`.
+
+---
+
 ## Disclaimer
 
 > Sponsorship and E-Verify data is sourced from public US government datasets
