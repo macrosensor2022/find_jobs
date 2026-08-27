@@ -50,6 +50,31 @@ EXCLUDED_TITLE_MARKERS = (
     'vp ', 'chief ', 'architect',
 )
 
+# Full-time new-grad feed only: titles that require a doctorate or a
+# security clearance / US-citizenship are unwinnable for an F-1/OPT candidate
+# and crowd out genuine early-career DE/analytics roles.
+PHD_TITLE_RE = re.compile(
+    r'\b(ph\.?d|doctorate|post[\s\-]?doc|doctoral)\b',
+    re.I,
+)
+CLEARANCE_TITLE_RE = re.compile(
+    r'\b(security clearance|top secret|ts[\s\-/\\]sci|active clearance|'
+    r'clearance required|polygraph)\b',
+    re.I,
+)
+CITIZENSHIP_TITLE_RE = re.compile(
+    r'\b(u\.?s\.? citizen|citizenship required|citizen(?:s)? only)\b',
+    re.I,
+)
+# Defense / intelligence / federal contractors that gate on clearance or
+# citizenship. Only applied to the new-grad (full-time) feed.
+DEFENSE_TITLE_RE = re.compile(
+    r'\b(intelligence|defense|defence|national security|homeland security|'
+    r'cyber|space force|air force|navy|army|military|weapon|missile|'
+    r'radar|satellite|surveillance|classified|federal)\b',
+    re.I,
+)
+
 
 INTERNSHIP_TITLE_RE = re.compile(
     r'\b(intern(?:ship)?s?|co[\s\-]?ops?|coops?)\b',
@@ -151,6 +176,15 @@ class GithubSimplifyScraper(BaseScraper):
         if self.source_name == 'github_newgrad' and is_internship_role(title):
             return None
 
+        # Full-time new-grad feed: drop PhD / clearance / citizenship / defense
+        # roles that an F-1/OPT early-career candidate cannot realistically win.
+        if self.source_name == 'github_newgrad' and self._is_off_target_newgrad(
+            title,
+            degrees=listing.get('degrees'),
+            sponsorship=listing.get('sponsorship'),
+        ):
+            return None
+
         if not self._title_matches_skills(title, listing.get('category')):
             return None
 
@@ -250,6 +284,35 @@ class GithubSimplifyScraper(BaseScraper):
 
         # Non-data categories (e.g. Software / Quant): require explicit skill keyword
         return has_skill
+
+    def _is_off_target_newgrad(self, title: str, degrees=None, sponsorship=None) -> bool:
+        """True when a new-grad listing is not realistically winnable by an
+        F-1/OPT early-career candidate: PhD-gated, clearance/citizenship-gated,
+        or defense/intelligence contractor roles."""
+        t = (title or '').lower()
+
+        if PHD_TITLE_RE.search(t):
+            return True
+        if CLEARANCE_TITLE_RE.search(t):
+            return True
+        if CITIZENSHIP_TITLE_RE.search(t):
+            return True
+        if DEFENSE_TITLE_RE.search(t):
+            return True
+
+        # The Simplify feed stores the degree requirement in `degrees`.
+        if degrees:
+            deg_text = ' '.join(str(d) for d in degrees).lower()
+            if re.search(r'\bph\.?d|doctorate\b', deg_text):
+                return True
+
+        # The feed's `sponsorship` field can state citizenship/clearance gates.
+        if sponsorship:
+            sp = str(sponsorship).lower()
+            if re.search(r'\b(citizen|citizenship|clearance)\b', sp):
+                return True
+
+        return False
 
     def _location_ok(self, location: str) -> bool:
         loc = (location or '').lower()

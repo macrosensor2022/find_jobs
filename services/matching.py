@@ -9,6 +9,8 @@ from services.experience import analyze_experience
 from services.location_pref import score_location
 from services.requirements import score_education, score_responsibilities
 from services.role_classifier import classify_role
+from services.role_family import classify_family
+from services.skill_gaps import skill_gap_matrix
 from services.skills import score_skills
 from services.sponsorship import assess_sponsorship
 from services.text_utils import clean_html
@@ -58,7 +60,13 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
     skills_profile = profile_skills or Config.PROFILE_SKILLS
 
     role = classify_role(title, clean_desc)
+    family = classify_family(title, clean_desc)
     exp = analyze_experience(title, clean_desc)
+    skills_matrix = skill_gap_matrix({
+        'title': title,
+        'description': clean_desc,
+        'profile_skills': skills_profile,
+    })
     skills = score_skills(job_text, skills_profile)
     resp = score_responsibilities(job_text)
     edu = score_education(clean_desc)
@@ -95,6 +103,15 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
         risks.insert(0, 'Provisional score: the posting text was not available, '
                         'so requirements could not be checked')
 
+    # Hidden fit surfaces as a reason to apply when the title looked off-target.
+    if family.get('hidden_fit'):
+        reasons.append('💎 ' + family['hidden_fit_reason'])
+    # Skill-gap matrix reinforces gaps (must-have gaps cost more than nice-to-have).
+    must_have_gaps = skills_matrix.get('must_have_gaps') or []
+    for gap in must_have_gaps[:3]:
+        if gap not in gaps:
+            gaps.append(f'{gap} (must-have)')
+
     eligible = not exp['hard_drop'] and not role['avoid'] and auth['status'] != 'red'
     disqualifiers = []
     if exp['hard_drop']:
@@ -117,8 +134,10 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
         'gaps': gaps,
         'risks': risks,
         'role': role,
+        'role_family': family,
         'experience': exp,
         'skills': skills,
+        'skills_matrix': skills_matrix,
         'responsibilities': resp,
         'education': edu,
         'location': loc,

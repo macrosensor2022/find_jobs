@@ -222,6 +222,12 @@ def _migrate_add_columns(engine):
             'dedupe_key':      'VARCHAR(255)',
             'duplicate_of_id': 'INTEGER',
             'alt_source_urls': 'TEXT',
+            # Phase 12 — dedup/repost provenance
+            'first_seen':         'DATETIME',
+            'last_seen':          'DATETIME',
+            'source_count':       'INTEGER DEFAULT 1',
+            'source_list':        'TEXT',
+            'possible_repost':    'BOOLEAN DEFAULT 0',
             # Work authorization
             'sponsorship_status':          "VARCHAR(10) DEFAULT 'unknown'",
             'sponsorship_evidence':        'TEXT',
@@ -248,6 +254,19 @@ def _migrate_add_columns(engine):
             'is_not_interested':      'BOOLEAN DEFAULT 0',
             'location_blocked':       'BOOLEAN DEFAULT 0',
             'role_blocked':           'BOOLEAN DEFAULT 0',
+            # Phase 2 / 5 / 9 / 10
+            'application_priority_score':  'INTEGER',
+            'application_recommendation':  'VARCHAR(16)',
+            'application_readiness_score': 'INTEGER',
+            'application_effort_estimate': 'VARCHAR(16)',
+            'competition_signal':          'VARCHAR(16)',
+            'applicant_count':             'INTEGER',
+            'applicant_count_source':      'VARCHAR(50)',
+            'competition_captured_at':     'DATETIME',
+            'competition_breakdown':       'TEXT',
+            'readiness_breakdown':         'TEXT',
+            'skill_gap_matrix':            'TEXT',
+            'hidden_fit':                  'BOOLEAN DEFAULT 0',
         }),
         (UserProfile.__tablename__, {
             'grad_date':         'DATE',
@@ -600,6 +619,20 @@ def get_jobs():
     if min_final is not None:
         query = query.filter(Job.final_score >= min_final)
 
+    min_priority = request.args.get('min_priority', type=int)
+    if min_priority is not None:
+        query = query.filter(Job.application_priority_score >= min_priority)
+
+    recommendation = request.args.get('recommendation')
+    if recommendation:
+        allowed = [r.strip() for r in recommendation.split(',') if r.strip()]
+        if allowed:
+            query = query.filter(Job.application_recommendation.in_(allowed))
+
+    readiness_min = request.args.get('min_readiness', type=int)
+    if readiness_min is not None:
+        query = query.filter(Job.application_readiness_score >= readiness_min)
+
     sponsorship_status = request.args.get('sponsorship_status')
     if sponsorship_status:
         allowed = [s.strip() for s in sponsorship_status.split(',') if s.strip()]
@@ -701,6 +734,11 @@ def get_jobs():
         query = query.order_by(Job.job_quality_score.desc().nullslast())
     elif sort_by == 'rank_score':
         query = query.order_by(Job.rank_score.desc().nullslast(), Job.match_score.desc().nullslast())
+    elif sort_by == 'priority':
+        query = query.order_by(
+            Job.application_priority_score.desc().nullslast(),
+            Job.final_score.desc().nullslast(),
+        )
     elif sort_by == 'location_opportunity':
         query = query.order_by(
             Job.location_opportunity_score.desc().nullslast(),
@@ -1249,6 +1287,47 @@ def analytics_outcomes():
     from services.analytics import build_analytics
 
     return jsonify(build_analytics(db, Job, Application))
+
+
+@app.route('/api/analytics/employer-radar', methods=['GET'])
+def analytics_employer_radar():
+    """Which employers are actively hiring in the target lane right now."""
+    from services.analytics import employer_radar
+
+    days = request.args.get('days', default=30, type=int)
+    limit = request.args.get('limit', default=12, type=int)
+    return jsonify(employer_radar(db, Job, days=days, limit=limit))
+
+
+@app.route('/api/analytics/market-skills', methods=['GET'])
+def analytics_market_skills():
+    """The skills the current scored pool asks for most (Phase 17)."""
+    from services.analytics import _skill_demand
+
+    limit = request.args.get('limit', default=15, type=int)
+    # _skill_demand returns a sorted list of {skill, jobs, share}.
+    demand = _skill_demand(db, Job, limit=limit)
+    return jsonify({'skills': demand, 'note': 'From live scored full-time jobs.'})
+
+
+@app.route('/api/search/health', methods=['GET'])
+def search_health_endpoint():
+    """Phase 20 — diagnostics for the search pipeline."""
+    from services.analytics import search_health
+    from backend.models import SearchRun
+
+    return jsonify(search_health(db, Job, SearchRun))
+
+
+@app.route('/api/jobs/<int:job_id>/why-hidden', methods=['GET'])
+def job_why_hidden(job_id):
+    """Phase 15 — why a job is not in the realistic apply list."""
+    from services.briefing import why_hidden
+
+    job = db.session.get(Job, job_id)
+    if job is None:
+        return jsonify({'job_id': job_id, 'reasons': []})
+    return jsonify({'job_id': job_id, 'reasons': why_hidden(job)})
 
 
 @app.route('/api/external-search', methods=['GET'])

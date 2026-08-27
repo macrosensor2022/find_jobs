@@ -34,6 +34,50 @@ def realistic_filters(Job):
     ]
 
 
+def why_hidden(job, Job=None):
+    """Explain why a job is not shown in the realistic apply list.
+
+    Returns a list of human-readable reasons, each tied to a concrete stored
+    value. No reason is invented; unknown fields simply do not produce one.
+    """
+    reasons = []
+    if job is None:
+        return reasons
+    get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
+
+    if get('is_hidden'):
+        reasons.append('Marked hidden / dismissed by you.')
+    if get('is_applied'):
+        reasons.append('Already applied.')
+    if get('is_not_interested'):
+        reasons.append('Marked not interested.')
+    if get('is_expired'):
+        reasons.append('Posting flagged as expired/unreachable.')
+    if get('duplicate_of_id'):
+        reasons.append('Duplicate of another stored job (kept once).')
+
+    if get('exp_hard_drop'):
+        reasons.append('Experience requirement is a hard drop for your profile.')
+    if get('location_blocked'):
+        reasons.append('Location is outside your target states.')
+    if get('role_blocked'):
+        reasons.append('Role family is off-target for your search.')
+    if get('sponsorship_status') == 'red':
+        reasons.append('Sponsorship status is red (no visa sponsorship).')
+
+    quality = get('job_quality_score')
+    if quality is not None and quality < Config.MIN_QUALITY_FOR_RANKING:
+        reasons.append(f'Quality score {quality} is below the ranking minimum '
+                       f'({Config.MIN_QUALITY_FOR_RANKING}).')
+
+    if get('freshness_bucket') == 'stale':
+        reasons.append('Posting is stale (14+ days, not rediscovered).')
+
+    if not reasons:
+        reasons.append('This job passes the realistic filters — it should be visible.')
+    return reasons
+
+
 def applyable_query(Job, realistic=True):
     """Base query for jobs that are realistically worth applying to.
 
@@ -98,7 +142,8 @@ def top_jobs(Job, limit=None, min_score=None, realistic=True, prefer_fresh=True)
         score = float(job.final_score or 0)
         bucket = (job.freshness_bucket or 'unknown')
         bucket_bonus = {
-            'hot': 18, 'fresh': 12, 'recent': 4, 'aging': -8, 'stale': -20, 'unknown': 0,
+            'hot': 22, 'fresh': 14, 'recent': 6, 'aging': -6,
+            'old': -14, 'stale': -20, 'unknown': 0,
         }.get(bucket, 0)
         scraped = job.date_scraped
         scraped_bonus = 0

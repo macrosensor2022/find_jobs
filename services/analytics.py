@@ -5,6 +5,8 @@ is not enough data to say anything, we say that instead of showing a
 meaningless percentage.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from config.settings import Config
 
 INTERVIEW_STATUSES = ('PHONE_SCREEN', 'INTERVIEW', 'TECHNICAL', 'FINAL', 'OFFER')
@@ -124,6 +126,110 @@ def _skill_demand(db, Job, limit=15):
         {'skill': skill, 'jobs': count, 'share': round(count / total * 100, 1)}
         for skill, count in ranked
     ]
+
+
+def employer_radar(db, Job, days=30, limit=12):
+    """Which employers are actively hiring in the candidate's target lane.
+
+    Every figure comes from real stored jobs; only non-hidden, non-expired,
+    non-duplicate postings are counted. Returns a ranked list of employers.
+    """
+    from sqlalchemy import case, or_, func
+
+    recent = datetime.now(timezone.utc) - timedelta(days=days)
+    base = Job.query.filter(
+        Job.is_hidden.is_(False),
+        Job.is_expired.is_(False),
+        Job.duplicate_of_id.is_(None),
+        or_(
+            Job.date_scraped >= recent,
+            Job.date_posted >= recent,
+        ),
+    )
+
+    rows = (
+        base.with_entities(
+            Job.company,
+            func.count(Job.id).label('open_roles'),
+            func.sum(
+                case((Job.candidate_match_score >= Config.STRONG_MATCH_MIN, 1), else_=0),
+            ).label('strong_matches'),
+            func.sum(
+                case((Job.application_url_status == 'verified', 1), else_=0),
+            ).label('verified_links'),
+        )
+        .group_by(Job.company)
+        .order_by(func.count(Job.id).desc())
+        .limit(limit)
+        .all()
+    )
+    active = [
+        {
+            'company': company,
+            'open_roles': int(roles),
+            'strong_matches': int(strong or 0),
+            'verified_apply_links': int(verified or 0),
+            'direct_hire': (verified or 0) >= (roles or 0) / 2,
+        }
+        for company, roles, strong, verified in rows if company
+    ]
+    return {
+        'active_employers': active,
+        'window_days': days,
+        'note': 'Counts real stored postings only, in the full-time target lanes.',
+    }
+
+
+def search_health(db, Job, SearchRun):
+    """Diagnostics for the search pipeline: what is working, what is silent."""
+    now = datetime.now(timezone.utc)
+
+    jobs_total = Job.query.filter(Job.is_hidden.is_(False)).count()
+    jobs_applied = Job.query.filter(Job.is_applied.is_(True)).count()
+
+    runs = (SearchRun.query.order_by(SearchRun.started_at.desc()).limit(20).all()
+            if SearchRun is not None else [])
+    last_run = runs[0].to_dict() if runs else None
+
+    # Jobs whose apply links should still be re-verified (not yet confirmed).
+    due_for_verification = Job.query.filter(
+        Job.is_hidden.is_(False), Job.is_expired.is_(False),
+        db.or_(
+            Job.verification_status.is_(None),
+            Job.verification_status.in_(['unverified', 'active']),
+        ),
+    ).count()
+
+    issues = _health_issues(runs, last_run)
+    status = (
+        'ok'
+        if runs and last_run and last_run.get('state') not in ('failed', 'error')
+        and not issues
+        else 'attention'
+    )
+    return {
+        'generated_at': now.isoformat(),
+        'jobs': {
+            'total_visible': int(jobs_total),
+            'applied': int(jobs_applied),
+            'due_for_verification': due_for_verification,
+        },
+        'last_search_run': last_run,
+        'recent_runs_count': len(runs),
+        'status': status,
+        'issues': issues,
+    }
+
+
+def _health_issues(runs, last_run):
+    issues = []
+    if not runs:
+        issues.append('No search runs recorded yet.')
+    elif last_run and last_run.get('state') in ('error', 'failed'):
+        issues.append(f"Last search run ended in {last_run.get('state')}.")
+    if not issues:
+        issues.append('No issues detected.')
+    return issues
 
 
 def _recommendations(analytics):

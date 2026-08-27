@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from config.settings import Config
 from services.matching import evaluate_job
 from services.opportunity import evaluate_opportunity
+from services.priority import (application_effort, application_priority,
+                               application_readiness, recommendation_for)
 from services.quality import evaluate_quality
 
 
@@ -37,6 +39,7 @@ def final_score(match_score, opportunity_score, quality_score,
 def score_job(job, profile_skills=None, watchlist=None, weights=None,
               location_prefs=None, opportunity_weights=None, now=None):
     """Run the full scoring pipeline for one job and return a flat result."""
+    _get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
     match = evaluate_job(job, profile_skills=profile_skills, weights=weights,
                          location_prefs=location_prefs)
     opportunity = evaluate_opportunity(job, match_result=match, watchlist=watchlist,
@@ -44,16 +47,36 @@ def score_job(job, profile_skills=None, watchlist=None, weights=None,
     quality = evaluate_quality(job)
     final = final_score(match['score'], opportunity['score'], quality['score'])
 
+    # Phase 2 — application priority + recommendation (a recommendation to
+    # spend time, never a claim of likely interview).
+    priority = application_priority(match, opportunity, quality['score'], job)
+    recommendation = recommendation_for(priority)
+
+    # Phase 9 — application readiness. The caller may pass profile context via
+    # the `profile` kwarg; when absent the resume availability check is simply
+    # unknown and slightly dents the score.
+    _profile = profile_skills.get('_profile') if isinstance(profile_skills, dict) else {}
+    readiness = application_readiness(job, profile=_profile or None)
+
+    # Phase 10 — application effort (banded estimate from posting signals).
+    effort = application_effort(_get('description'))
+
     return {
         'candidate_match_score': match['score'],
         'opportunity_score': opportunity['score'],
         'job_quality_score': quality['score'],
         'final_score': final,
+        'application_priority_score': priority,
+        'application_recommendation': recommendation['action'],
+        'application_readiness_score': readiness['score'],
+        'application_effort_estimate': effort,
         'eligible': match['eligible'] and quality['score'] >= Config.MIN_QUALITY_FOR_RANKING,
         'disqualifiers': match['disqualifiers'],
         'match': match,
         'opportunity': opportunity,
         'quality': quality,
+        'readiness': readiness,
+        'recommendation': recommendation,
         'freshness': opportunity['freshness'],
         'scored_at': (now or datetime.now(timezone.utc)),
     }
@@ -104,4 +127,27 @@ def apply_to_model(job_model, result):
     # instead of loading and re-scoring every row.
     job_model.location_blocked = match['location']['score'] <= Config.LOCATION_BLOCK_MAX
     job_model.role_blocked = match['role']['score'] < Config.ROLE_BLOCK_MIN
+
+    # ---- Phase 2 / 5 / 8 / 9 / 10 persisted scores ----
+    job_model.application_priority_score = result.get('application_priority_score')
+    job_model.application_recommendation = result.get('application_recommendation')
+    job_model.application_readiness_score = result.get('application_readiness_score')
+    job_model.application_effort_estimate = result.get('application_effort_estimate')
+
+    readiness = result.get('readiness') or {}
+    job_model.readiness_breakdown = json.dumps(readiness)
+
+    # Role family + hidden fit and skill-gap matrix from the match.
+    family = (result.get('match') or {}).get('role_family') or {}
+    job_model.role_family = family.get('family') or job_model.role_family
+    job_model.hidden_fit = bool(family.get('hidden_fit'))
+    if job_model.role_family and not job_model.match_reasons:
+        job_model.match_reasons = json.dumps(family.get('reasons') or [])
+    sm = (result.get('match') or {}).get('skills_matrix') or {}
+    if sm.get('matrix'):
+        job_model.skill_gap_matrix = json.dumps(sm['matrix'])
+
+    # Competition is intentionally NOT derived from the scoring engine; it is
+    # captured by the source adapter when legitimate data exists and persisted
+    # via the updater. Nothing here invents applicant counts.
     return job_model

@@ -241,14 +241,6 @@ class Config:
             'kind': 'intern',
             'job_type': 'internship',
             'url': (
-                'https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/'
-                'dev/.github/scripts/listings.json'
-            ),
-        },
-        {
-            'kind': 'intern',
-            'job_type': 'internship',
-            'url': (
                 'https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/'
                 'dev/.github/scripts/listings.json'
             ),
@@ -649,12 +641,15 @@ class Config:
     ALLOW_RELOCATION = os.getenv('ALLOW_RELOCATION', 'true').lower() == 'true'
 
     # ---- Freshness / expiry ---------------------------------------------------
+    # Thresholds are hour ceilings; `bucket_for` returns the first bucket the
+    # age is below. Strictly increasing so the mapping is unambiguous.
     FRESHNESS_BUCKETS = [
-        (24, 'hot'),        # <24h
-        (72, 'fresh'),      # 1-3 days
-        (168, 'recent'),    # 4-7 days
-        (336, 'aging'),     # 8-14 days
-        (None, 'stale'),    # >14 days
+        (6, 'hot'),         # 0-6h
+        (24, 'fresh'),      # 6-24h
+        (72, 'recent'),     # 1-3 days
+        (168, 'aging'),     # 3-7 days
+        (336, 'old'),       # 7-14 days
+        (None, 'stale'),    # 14+ days
     ]
     JOB_EXPIRY_DAYS = int(os.getenv('JOB_EXPIRY_DAYS', '30'))
     VERIFY_STALE_AFTER_HOURS = int(os.getenv('VERIFY_STALE_AFTER_HOURS', '48'))

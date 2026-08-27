@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import List, Dict
 import sys
@@ -172,6 +173,22 @@ class JobScraperManager:
         import json
         from datetime import datetime, timezone
 
+        # ---- Phase 12 — dedup/repost provenance ----
+        now = datetime.now(timezone.utc)
+        if existing.first_seen is None:
+            existing.first_seen = now
+        existing.last_seen = now
+
+        src_list = set()
+        if existing.source_list:
+            try:
+                src_list = set(json.loads(existing.source_list) or [])
+            except (ValueError, TypeError):
+                src_list = set()
+        src_list.add((new_source or '').lower())
+        existing.source_list = json.dumps(sorted(s for s in src_list if s))
+        existing.source_count = max(1, len(src_list))
+
         new_url = job_data.get('job_url') or job_data.get('application_url')
         if new_url:
             known = set()
@@ -215,6 +232,8 @@ class JobScraperManager:
             if incoming > current:
                 existing.date_posted = job_data['date_posted']
                 existing.date_posted_origin = job_data.get('date_posted_origin') or 'feed'
+                # The same role re-posted with a newer posting date is a repost.
+                existing.possible_repost = True
 
         if not existing.application_url and job_data.get('application_url'):
             existing.application_url = job_data['application_url']
@@ -612,6 +631,10 @@ class JobScraperManager:
             ),
             dedupe_key=build_dedupe_key(job_data),
             verification_status='unverified',
+            first_seen=datetime.now(timezone.utc),
+            last_seen=datetime.now(timezone.utc),
+            source_count=1,
+            source_list=json.dumps([(source or '').lower()] if source else []),
         )
 
     def _enrich_job_with_opt_data(self, job: Job, job_data: dict):

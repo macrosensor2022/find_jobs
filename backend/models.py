@@ -112,6 +112,12 @@ class Job(db.Model):
     dedupe_key = db.Column(db.String(255), nullable=True)
     duplicate_of_id = db.Column(db.Integer, nullable=True)
     alt_source_urls = db.Column(db.Text, nullable=True)  # JSON list
+    # ---- Phase 12 — dedup / repost provenance -------------------------------
+    first_seen = db.Column(db.DateTime, nullable=True)     # first discovery
+    last_seen = db.Column(db.DateTime, nullable=True)       # most recent rediscovery
+    source_count = db.Column(db.Integer, default=1)         # distinct sources seen
+    source_list = db.Column(db.Text, nullable=True)         # JSON list of source names
+    possible_repost = db.Column(db.Boolean, default=False)  # posting date advanced on merge
 
     # ---- Work authorization (evidence-backed, never inferred from employer) --
     sponsorship_status = db.Column(db.String(10), default='unknown')  # green|yellow|red|unknown
@@ -125,7 +131,7 @@ class Job(db.Model):
     seniority_level = db.Column(db.String(24), nullable=True)
     remote_type = db.Column(db.String(12), nullable=True)  # remote|hybrid|onsite|unknown
 
-    # ---- Scores (all explainable; breakdown stored as JSON) -----------------
+    # ---- Completion (all explainable; breakdown stored as JSON) -------------
     candidate_match_score = db.Column(db.Integer, nullable=True)
     opportunity_score = db.Column(db.Integer, nullable=True)
     job_quality_score = db.Column(db.Integer, nullable=True)
@@ -138,6 +144,20 @@ class Job(db.Model):
     quality_flags = db.Column(db.Text, nullable=True)
     freshness_bucket = db.Column(db.String(12), nullable=True)
     scored_at = db.Column(db.DateTime, nullable=True)
+
+    # ---- Phase 2 / 5 / 9 / 10 — priority, competition, readiness, effort -----
+    application_priority_score = db.Column(db.Integer, nullable=True)
+    application_recommendation = db.Column(db.String(16), nullable=True)  # apply_now|apply|watch|skip
+    application_readiness_score = db.Column(db.Integer, nullable=True)
+    application_effort_estimate = db.Column(db.String(16), nullable=True)  # band string
+    competition_signal = db.Column(db.String(16), nullable=True)   # LOW|MODERATE|HIGH|VERY_HIGH|UNKNOWN
+    applicant_count = db.Column(db.Integer, nullable=True)
+    applicant_count_source = db.Column(db.String(50), nullable=True)
+    competition_captured_at = db.Column(db.DateTime, nullable=True)
+    competition_breakdown = db.Column(db.Text, nullable=True)  # JSON
+    readiness_breakdown = db.Column(db.Text, nullable=True)    # JSON
+    skill_gap_matrix = db.Column(db.Text, nullable=True)       # JSON matrix
+    hidden_fit = db.Column(db.Boolean, default=False)
 
     is_not_interested = db.Column(db.Boolean, default=False)
 
@@ -226,6 +246,11 @@ class Job(db.Model):
             'dedupe_key': self.dedupe_key,
             'duplicate_of_id': self.duplicate_of_id,
             'alt_source_urls': _load_json(self.alt_source_urls, []),
+            'first_seen': self.first_seen.isoformat() if self.first_seen else None,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'source_count': self.source_count or 1,
+            'source_list': _load_json(self.source_list, []),
+            'possible_repost': bool(self.possible_repost),
             'sponsorship_status': self.sponsorship_status or 'unknown',
             'sponsorship_evidence': self.sponsorship_evidence,
             'sponsorship_evidence_source': self.sponsorship_evidence_source,
@@ -248,6 +273,26 @@ class Job(db.Model):
             'scored_at': self.scored_at.isoformat() if self.scored_at else None,
             'is_not_interested': bool(self.is_not_interested),
             'salary_display': self._salary_display(),
+            # Phase 2 / 5 / 9 / 10
+            'application_priority_score': self.application_priority_score,
+            'application_recommendation': self.application_recommendation,
+            'application_readiness_score': self.application_readiness_score,
+            'application_effort_estimate': self.application_effort_estimate,
+            'competition_signal': self.competition_signal,
+            'applicant_count': self.applicant_count,
+            'applicant_count_source': self.applicant_count_source,
+            'competition_captured_at': (
+                self.competition_captured_at.isoformat()
+                if self.competition_captured_at else None
+            ),
+            'competition_breakdown': _load_json(self.competition_breakdown, {}),
+            'readiness_breakdown': _load_json(self.readiness_breakdown, {}),
+            'skill_gap_matrix': _load_json(self.skill_gap_matrix, []),
+            'hidden_fit': bool(self.hidden_fit),
+            'recommendation': (
+                self.application_recommendation or 'watch'
+            ),
+            'application_readiness': self.application_readiness_score,
         })
         return data
 

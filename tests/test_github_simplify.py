@@ -72,6 +72,35 @@ class TestGithubSimplify(unittest.TestCase):
         job = self.scraper.parse_job_listing(item)
         self.assertEqual(job.get('sponsorship_hint'), 'no_sponsorship')
 
+    def test_drops_phd_title(self):
+        item = dict(SAMPLE, title='Data Scientist / Computer Scientist PhD Graduate - Decision Systems')
+        self.assertIsNone(self.scraper.parse_job_listing(item))
+
+    def test_drops_phd_degree_requirement(self):
+        item = dict(SAMPLE, title='Modeler and Data Analyst', degrees=['Doctorate'])
+        self.assertIsNone(self.scraper.parse_job_listing(item))
+
+    def test_drops_clearance_title(self):
+        item = dict(SAMPLE, title='Data Scientist - Security Clearance Required')
+        self.assertIsNone(self.scraper.parse_job_listing(item))
+
+    def test_drops_defense_intelligence_title(self):
+        item = dict(SAMPLE, title='Software Engineering/ML/Data Scientist Graduate - Intelligence Systems')
+        self.assertIsNone(self.scraper.parse_job_listing(item))
+
+    def test_drops_citizenship_sponsorship_field(self):
+        item = dict(SAMPLE, sponsorship='US Citizenship Required')
+        self.assertIsNone(self.scraper.parse_job_listing(item))
+
+    def test_keeps_early_career_data_roles(self):
+        for title in ('Data Engineer New Grad', 'Junior Data Engineer',
+                      'Data Analyst - Data & Analytics', 'Associate Data Scientist'):
+            item = dict(SAMPLE, title=title)
+            self.assertIsNotNone(
+                self.scraper.parse_job_listing(item),
+                f'expected to keep: {title}',
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

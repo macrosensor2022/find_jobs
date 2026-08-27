@@ -15,8 +15,12 @@ from services import freshness, quality, ranking
 from services.experience import analyze_experience
 from services.location_pref import detect_remote_type, score_location
 from services.matching import evaluate_job, default_weights
+from services.priority import (application_effort, application_priority,
+                               application_readiness, recommendation_for)
 from services.requirements import score_education, score_responsibilities
 from services.role_classifier import classify_role, detect_seniority
+from services.role_family import classify_family, is_data_automation
+from services.skill_gaps import skill_gap_matrix
 from services.skills import extract_job_skills, score_skills
 from services.sponsorship import assess_sponsorship
 
@@ -291,7 +295,10 @@ class TestFreshness(unittest.TestCase):
         self.now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
 
     def test_buckets(self):
-        cases = [(2, 'hot'), (48, 'fresh'), (120, 'recent'), (300, 'aging'), (500, 'stale')]
+        # Spec buckets: HOT 0-6h, FRESH 6-24h, RECENT 1-3d, AGING 3-7d,
+        # OLD 7-14d, STALE 14+.
+        cases = [(2, 'hot'), (12, 'fresh'), (48, 'recent'), (120, 'aging'),
+                 (200, 'old'), (500, 'stale')]
         for hours, expected in cases:
             posted = self.now - timedelta(hours=hours)
             self.assertEqual(freshness.evaluate(posted, now=self.now)['bucket'], expected)
@@ -515,6 +522,103 @@ class TestDedupeAndCanApplyContract(unittest.TestCase):
 
 def result_score_of_strong_job():
     return evaluate_job(TestEndToEndMatching()._strong_job())['score']
+
+
+class TestRoleFamily(unittest.TestCase):
+    """Phase 6/7 — role family taxonomy + hidden-fit detection."""
+
+    def test_data_engineer_explicit(self):
+        result = classify_family('Data Engineer', 'ETL with SQL and dbt')
+        self.assertEqual(result['family'], 'DATA_ENGINEERING')
+        self.assertFalse(result['hidden_fit'])
+
+    def test_technology_analyst_data_stack_is_hidden_fit(self):
+        result = classify_family(
+            'Technology Analyst',
+            'Build ETL pipelines with SQL, Python and Azure; Power BI dashboards',
+        )
+        self.assertEqual(result['family'], 'ANALYTICS_BI')
+        self.assertTrue(result['hidden_fit'])
+        self.assertIsNotNone(result['hidden_fit_reason'])
+
+    def test_qa_automation_not_data_automation(self):
+        result = classify_family(
+            'Automation Engineer', 'Write Selenium test cases and manual QA')
+        self.assertNotEqual(result['family'], 'DATA_AUTOMATION')
+
+    def test_data_automation_lane_positive(self):
+        result = classify_family(
+            'Automation Engineer',
+            'Build Python and SQL workflows orchestrated with Azure Functions',
+        )
+        self.assertEqual(result['family'], 'DATA_AUTOMATION')
+
+    def test_data_automation_qa_only_guard(self):
+        self.assertFalse(is_data_automation('DATA_AUTOMATION', 'Selenium test cases'))
+        self.assertTrue(is_data_automation(
+            'DATA_AUTOMATION', 'Python, SQL, ETL data pipeline'))
+
+
+class TestSkillGaps(unittest.TestCase):
+    """Phase 8 — skill-gap matrix states and required/nice-to-have detection."""
+
+    def test_matched_partial_missing(self):
+        matrix = skill_gap_matrix({
+            'title': 'Data Analyst',
+            'description': (
+                'We are hiring a Data Analyst to own reporting and pipelines. '
+                'Python and SQL are required. Knowledge of T-SQL is preferred. '
+                'You will build dashboards, maintain data models, and partner '
+                'with engineering. Minimum of two years experience with SQL '
+                'reporting is strongly preferred for this analytics role.'
+            ),
+            'profile_skills': [
+                {'name': 'Python', 'proficiency': 4},
+                {'name': 'SQL', 'proficiency': 5},
+            ],
+        })
+        by_skill = {row['skill']: row for row in matrix['matrix']}
+        self.assertEqual(by_skill['SQL']['status'], 'MATCHED')
+        self.assertEqual(by_skill['Python']['status'], 'MATCHED')
+        # Profile has SQL, posting asks T-SQL → counted as a bridgeable partial.
+        self.assertEqual(by_skill['T-SQL']['status'], 'PARTIAL')
+        # T-SQL is phrased with a preferred cue and bridges -> not a must-have gap.
+        self.assertNotIn('T-SQL', matrix['must_have_gaps'])
+
+
+class TestPriority(unittest.TestCase):
+    """Phase 2/9/10 — application priority, recommendation, readiness, effort."""
+
+    def test_high_match_gives_apply_now(self):
+        match = {'score': 90, 'role_family': {'hidden_fit': False}}
+        opportunity = {'score': 80, 'freshness': {'bucket': 'hot', 'hours': 2}}
+        priority = application_priority(match, opportunity, 75, {
+            'title': 'Data Analyst New Grad', 'description': 'x' * 500,
+        })
+        self.assertGreaterEqual(priority, 70)
+        self.assertEqual(recommendation_for(priority)['action'], 'APPLY NOW')
+
+    def test_effort_band(self):
+        # Resume + cover letter (40+ band) is the strongest visible signal.
+        self.assertEqual(application_effort('Post a resume and cover letter'),
+                         '40+ min')
+        self.assertEqual(application_effort('Complete an online assessment'),
+                         '20-40 min')
+        self.assertEqual(application_effort('Submit your application here'),
+                         '10-20 min')
+        self.assertIsNone(application_effort(''))
+        self.assertIsNone(application_effort(None))
+
+    def test_readiness_reports_missing_apply_url(self):
+        result = application_readiness({'description': 'x' * 200})
+        self.assertLessEqual(result['score'], 94)
+        self.assertTrue(any(not c['ok'] for c in result['checks']))
+
+    def test_effort_band_upper_bound(self):
+        eff = application_effort('Provide resume, visa status, references, '
+                                 'portfolio, transcripts, coding assessment')
+        self.assertEqual(eff, '40+ min')
+
 
 
 if __name__ == '__main__':

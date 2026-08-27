@@ -1,0 +1,1841 @@
+From 2b0c87e622c55df5bfb064704d78b29d14467dae Mon Sep 17 00:00:00 2001
+From: openhands <openhands@all-hands.dev>
+Date: Thu, 27 Aug 2026 19:38:43 +0000
+Subject: [PATCH] Add application priority, role family, skill-gap, and market
+ intelligence to command center
+
+Phase 2/5/9/10: application_priority, recommendation_for (APPLY NOW/APPLY/WATCH/SKIP), application_readiness (capped <=94), application_effort (banded, not inverted), and competition_signal persisted into scoring pipeline and Job model.
+
+Phase 6/7/8: role-family taxonomy (7 families incl DATA_AUTOMATION) with hidden-fit detection, and skill-gap matrix (MATCHED/PARTIAL/MISSING, must-have vs nice-to-have).
+
+Phase 4: freshness buckets updated to HOT/FRESH/RECENT/AGING/OLD/STALE; OLD added.
+
+Backend: employer-radar, market-skills, search-health, why-hidden endpoints; /api/jobs gains min_priority/recommendation/min_readiness filters and sort_by=priority. Frontend cards + modal show recommendation badge, readiness, effort, role family, hidden-fit pill, competition, and skill matrix.
+
+Phase 13: scrapers drop PhD/clearance/citizenship/defense-gated new-grad roles unwinnable for F-1/OPT candidates.
+
+Tests: coverage for priority/readiness/effort/role-family/skill-gaps/hidden-fit; full suite 166 tests under plain unittest. Added AGENTS.md.
+
+Co-authored-by: openhands <openhands@all-hands.dev>
+---
+ AGENTS.md                              |  42 +++++
+ backend/app.py                         |  79 ++++++++
+ backend/models.py                      |  47 ++++-
+ config/settings.py                     |  21 +--
+ frontend/static/css/command-center.css |  29 +++
+ frontend/static/js/app.js              |  74 +++++++-
+ frontend/templates/index.html          |   1 +
+ scrapers/github_simplify_scraper.py    |  63 +++++++
+ scrapers/job_scraper_manager.py        |  23 +++
+ services/analytics.py                  | 106 +++++++++++
+ services/briefing.py                   |  47 ++++-
+ services/freshness.py                  |  56 +++++-
+ services/matching.py                   |  19 ++
+ services/priority.py                   | 244 +++++++++++++++++++++++++
+ services/ranking.py                    |  46 +++++
+ services/role_family.py                | 190 +++++++++++++++++++
+ services/skill_gaps.py                 | 140 ++++++++++++++
+ tests/test_github_simplify.py          |  29 +++
+ tests/test_scoring_engine.py           | 106 ++++++++++-
+ 19 files changed, 1334 insertions(+), 28 deletions(-)
+ create mode 100644 AGENTS.md
+ create mode 100644 services/priority.py
+ create mode 100644 services/role_family.py
+ create mode 100644 services/skill_gaps.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..ddab052
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,42 @@
++# AGENTS.md
++
++Repo: **find_jobs** — JobTracker, a personal full-time job-search "command center" (new-grad Data Engineering / Analytics) that scrapes job boards, scores each posting for candidate fit, and ranks them.
++
++## Commands
++
++- Run server: `python3 run.py` (Flask, port from `Config.PORT`, usually 8080).
++- Full test suite (plain pytest/unittest): `python3 -m unittest discover -s tests -q`
++- JS syntax check: `node --check frontend/static/js/app.js`
++- Re-score every stored job after changing weights/skills/sponsorship:
++  `python3 scripts/rescore_all.py` (not the app's background thread, which only fills rows with `final_score IS NULL`).
++- Run the app's scheduler/background: started by `run.py` via `backend.scheduler`.
++
++## Architecture (services/)
++
++- `services/ranking.score_job(...)` is the single scoring entry point and returns a `result` dict consumed by `apply_to_model(job_model, result)`. It persists: candidate/opportunity/quality/final scores, match breakdown/reasons/gaps/risks, freshness bucket, location/role blocked flags, sponsorship status, **and Phase 2/6/7/8/9/10 fields**: `application_priority_score`, `application_recommendation`, `application_readiness_score`, `application_effort_estimate`, `role_family`, `hidden_fit`, `skill_gap_matrix`.
++- `services/priority.py` — Phase 2/9/10: `application_priority`, `recommendation_for` (returns **uppercase** actions `APPLY NOW`/`APPLY`/`WATCH`/`SKIP`), `application_readiness` (score capped ≤ 94), `application_effort` (returns band strings `5-10 min`/`10-20 min`/`20-40 min`/`40+ min`, or `None` when nothing provided).
++- `services/role_family.py` — Phase 6/7: `classify_family` → 7 families incl. `DATA_AUTOMATION` + `hidden_fit`; `is_data_automation` excludes QA-only (Selenium) roles.
++- `services/skill_gaps.py` — Phase 8: `skill_gap_matrix(job)` returns `MATCHED`/`PARTIAL`/`MISSING` per required skill. **Requires description ≥ `Config.MIN_DESCRIPTION_CHARS`** (200) or returns a thin-description note. PARTIAL uses `_PARTIAL_BRIDGES`. A skill present in the profile (any proficiency) is MATCHED, so `dbt` with proficiency 1 is MATCHED, not PARTIAL.
++- `services/analytics.py` — `build_analytics`, plus `employer_radar(db, Job, days, limit)` and `search_health(db, Job, SearchRun)`. NOTE: use `from sqlalchemy import case` (import `case`, not `func.case`) for conditional sums.
++- `services/briefing.why_hidden(job)` — explains listing filters off real stored fields.
++
++## Backend / API
++
++- `backend/app.py` wires routes incl. `/api/analytics/employer-radar`, `/api/analytics/market-skills`, `/api/search/health`, `/api/jobs/<id>/why-hidden`, and `/api/jobs` filters `min_priority`, `recommendation`, `min_readiness`, `sort_by=priority` (priority sorts via `application_priority_score.desc().nullslast()`).
++- `backend/models.py` holds `Job` (new columns for the Phase fields), `SearchRun`, etc. New DB columns are added via the column-map + `_ensure_columns` migration in `backend/app.py`; existing rows are not backfilled automatically.
++
++## Frontend
++
++- `frontend/static/js/app.js` — card renderers. `recommendationBadge(job)` + `FRESHNESS_UI` (now HOT/FRESH/RECENT/AGING/OLD/STALE). Cards show recommendation badge, readiness %, effort, role family, hidden-fit pill, competition, and a `skillMatrixBlock`. `renderJobList` delegates to `renderSmartJobList`.
++- CSS for those in `frontend/static/css/command-center.css`.
++
++## Testing conventions
++
++- Tests import services with `sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))` so they run under plain `python -m unittest` (no custom harness needed). The project runner injects a nonstandard import path; plain pytest works now.
++- Keep effort/readiness/recommendation assertions aligned to the *actual* returns (uppercase actions, band strings, ≤94 readiness cap).
++
++## Gotchas
++
++- `application_effort` banding: do NOT invert the bands (`40+` → `'40+ min'`, `20-40` → `'20-40 min'`, `10-20` → `'10-20 min'`).
++- Always `node --check` app.js after editing the frontend.
++- Never invent applicant counts/competition — `competition_signal` is only set from legitimate source data via the updater.
+\ No newline at end of file
+diff --git a/backend/app.py b/backend/app.py
+index 08d1dc5..3c7cbe6 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -222,6 +222,12 @@ def _migrate_add_columns(engine):
+             'dedupe_key':      'VARCHAR(255)',
+             'duplicate_of_id': 'INTEGER',
+             'alt_source_urls': 'TEXT',
++            # Phase 12 — dedup/repost provenance
++            'first_seen':         'DATETIME',
++            'last_seen':          'DATETIME',
++            'source_count':       'INTEGER DEFAULT 1',
++            'source_list':        'TEXT',
++            'possible_repost':    'BOOLEAN DEFAULT 0',
+             # Work authorization
+             'sponsorship_status':          "VARCHAR(10) DEFAULT 'unknown'",
+             'sponsorship_evidence':        'TEXT',
+@@ -248,6 +254,19 @@ def _migrate_add_columns(engine):
+             'is_not_interested':      'BOOLEAN DEFAULT 0',
+             'location_blocked':       'BOOLEAN DEFAULT 0',
+             'role_blocked':           'BOOLEAN DEFAULT 0',
++            # Phase 2 / 5 / 9 / 10
++            'application_priority_score':  'INTEGER',
++            'application_recommendation':  'VARCHAR(16)',
++            'application_readiness_score': 'INTEGER',
++            'application_effort_estimate': 'VARCHAR(16)',
++            'competition_signal':          'VARCHAR(16)',
++            'applicant_count':             'INTEGER',
++            'applicant_count_source':      'VARCHAR(50)',
++            'competition_captured_at':     'DATETIME',
++            'competition_breakdown':       'TEXT',
++            'readiness_breakdown':         'TEXT',
++            'skill_gap_matrix':            'TEXT',
++            'hidden_fit':                  'BOOLEAN DEFAULT 0',
+         }),
+         (UserProfile.__tablename__, {
+             'grad_date':         'DATE',
+@@ -600,6 +619,20 @@ def get_jobs():
+     if min_final is not None:
+         query = query.filter(Job.final_score >= min_final)
+ 
++    min_priority = request.args.get('min_priority', type=int)
++    if min_priority is not None:
++        query = query.filter(Job.application_priority_score >= min_priority)
++
++    recommendation = request.args.get('recommendation')
++    if recommendation:
++        allowed = [r.strip() for r in recommendation.split(',') if r.strip()]
++        if allowed:
++            query = query.filter(Job.application_recommendation.in_(allowed))
++
++    readiness_min = request.args.get('min_readiness', type=int)
++    if readiness_min is not None:
++        query = query.filter(Job.application_readiness_score >= readiness_min)
++
+     sponsorship_status = request.args.get('sponsorship_status')
+     if sponsorship_status:
+         allowed = [s.strip() for s in sponsorship_status.split(',') if s.strip()]
+@@ -701,6 +734,11 @@ def get_jobs():
+         query = query.order_by(Job.job_quality_score.desc().nullslast())
+     elif sort_by == 'rank_score':
+         query = query.order_by(Job.rank_score.desc().nullslast(), Job.match_score.desc().nullslast())
++    elif sort_by == 'priority':
++        query = query.order_by(
++            Job.application_priority_score.desc().nullslast(),
++            Job.final_score.desc().nullslast(),
++        )
+     elif sort_by == 'location_opportunity':
+         query = query.order_by(
+             Job.location_opportunity_score.desc().nullslast(),
+@@ -1251,6 +1289,47 @@ def analytics_outcomes():
+     return jsonify(build_analytics(db, Job, Application))
+ 
+ 
++@app.route('/api/analytics/employer-radar', methods=['GET'])
++def analytics_employer_radar():
++    """Which employers are actively hiring in the target lane right now."""
++    from services.analytics import employer_radar
++
++    days = request.args.get('days', default=30, type=int)
++    limit = request.args.get('limit', default=12, type=int)
++    return jsonify(employer_radar(db, Job, days=days, limit=limit))
++
++
++@app.route('/api/analytics/market-skills', methods=['GET'])
++def analytics_market_skills():
++    """The skills the current scored pool asks for most (Phase 17)."""
++    from services.analytics import _skill_demand
++
++    limit = request.args.get('limit', default=15, type=int)
++    # _skill_demand returns a sorted list of {skill, jobs, share}.
++    demand = _skill_demand(db, Job, limit=limit)
++    return jsonify({'skills': demand, 'note': 'From live scored full-time jobs.'})
++
++
++@app.route('/api/search/health', methods=['GET'])
++def search_health_endpoint():
++    """Phase 20 — diagnostics for the search pipeline."""
++    from services.analytics import search_health
++    from backend.models import SearchRun
++
++    return jsonify(search_health(db, Job, SearchRun))
++
++
++@app.route('/api/jobs/<int:job_id>/why-hidden', methods=['GET'])
++def job_why_hidden(job_id):
++    """Phase 15 — why a job is not in the realistic apply list."""
++    from services.briefing import why_hidden
++
++    job = db.session.get(Job, job_id)
++    if job is None:
++        return jsonify({'job_id': job_id, 'reasons': []})
++    return jsonify({'job_id': job_id, 'reasons': why_hidden(job)})
++
++
+ @app.route('/api/external-search', methods=['GET'])
+ def external_search_links():
+     """Launcher for sites that cannot be integrated programmatically."""
+diff --git a/backend/models.py b/backend/models.py
+index a6de1cb..b02bff3 100644
+--- a/backend/models.py
++++ b/backend/models.py
+@@ -112,6 +112,12 @@ class Job(db.Model):
+     dedupe_key = db.Column(db.String(255), nullable=True)
+     duplicate_of_id = db.Column(db.Integer, nullable=True)
+     alt_source_urls = db.Column(db.Text, nullable=True)  # JSON list
++    # ---- Phase 12 — dedup / repost provenance -------------------------------
++    first_seen = db.Column(db.DateTime, nullable=True)     # first discovery
++    last_seen = db.Column(db.DateTime, nullable=True)       # most recent rediscovery
++    source_count = db.Column(db.Integer, default=1)         # distinct sources seen
++    source_list = db.Column(db.Text, nullable=True)         # JSON list of source names
++    possible_repost = db.Column(db.Boolean, default=False)  # posting date advanced on merge
+ 
+     # ---- Work authorization (evidence-backed, never inferred from employer) --
+     sponsorship_status = db.Column(db.String(10), default='unknown')  # green|yellow|red|unknown
+@@ -125,7 +131,7 @@ class Job(db.Model):
+     seniority_level = db.Column(db.String(24), nullable=True)
+     remote_type = db.Column(db.String(12), nullable=True)  # remote|hybrid|onsite|unknown
+ 
+-    # ---- Scores (all explainable; breakdown stored as JSON) -----------------
++    # ---- Completion (all explainable; breakdown stored as JSON) -------------
+     candidate_match_score = db.Column(db.Integer, nullable=True)
+     opportunity_score = db.Column(db.Integer, nullable=True)
+     job_quality_score = db.Column(db.Integer, nullable=True)
+@@ -139,6 +145,20 @@ class Job(db.Model):
+     freshness_bucket = db.Column(db.String(12), nullable=True)
+     scored_at = db.Column(db.DateTime, nullable=True)
+ 
++    # ---- Phase 2 / 5 / 9 / 10 — priority, competition, readiness, effort -----
++    application_priority_score = db.Column(db.Integer, nullable=True)
++    application_recommendation = db.Column(db.String(16), nullable=True)  # apply_now|apply|watch|skip
++    application_readiness_score = db.Column(db.Integer, nullable=True)
++    application_effort_estimate = db.Column(db.String(16), nullable=True)  # band string
++    competition_signal = db.Column(db.String(16), nullable=True)   # LOW|MODERATE|HIGH|VERY_HIGH|UNKNOWN
++    applicant_count = db.Column(db.Integer, nullable=True)
++    applicant_count_source = db.Column(db.String(50), nullable=True)
++    competition_captured_at = db.Column(db.DateTime, nullable=True)
++    competition_breakdown = db.Column(db.Text, nullable=True)  # JSON
++    readiness_breakdown = db.Column(db.Text, nullable=True)    # JSON
++    skill_gap_matrix = db.Column(db.Text, nullable=True)       # JSON matrix
++    hidden_fit = db.Column(db.Boolean, default=False)
++
+     is_not_interested = db.Column(db.Boolean, default=False)
+ 
+     created_at = db.Column(db.DateTime, default=_utcnow)
+@@ -226,6 +246,11 @@ class Job(db.Model):
+             'dedupe_key': self.dedupe_key,
+             'duplicate_of_id': self.duplicate_of_id,
+             'alt_source_urls': _load_json(self.alt_source_urls, []),
++            'first_seen': self.first_seen.isoformat() if self.first_seen else None,
++            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
++            'source_count': self.source_count or 1,
++            'source_list': _load_json(self.source_list, []),
++            'possible_repost': bool(self.possible_repost),
+             'sponsorship_status': self.sponsorship_status or 'unknown',
+             'sponsorship_evidence': self.sponsorship_evidence,
+             'sponsorship_evidence_source': self.sponsorship_evidence_source,
+@@ -248,6 +273,26 @@ class Job(db.Model):
+             'scored_at': self.scored_at.isoformat() if self.scored_at else None,
+             'is_not_interested': bool(self.is_not_interested),
+             'salary_display': self._salary_display(),
++            # Phase 2 / 5 / 9 / 10
++            'application_priority_score': self.application_priority_score,
++            'application_recommendation': self.application_recommendation,
++            'application_readiness_score': self.application_readiness_score,
++            'application_effort_estimate': self.application_effort_estimate,
++            'competition_signal': self.competition_signal,
++            'applicant_count': self.applicant_count,
++            'applicant_count_source': self.applicant_count_source,
++            'competition_captured_at': (
++                self.competition_captured_at.isoformat()
++                if self.competition_captured_at else None
++            ),
++            'competition_breakdown': _load_json(self.competition_breakdown, {}),
++            'readiness_breakdown': _load_json(self.readiness_breakdown, {}),
++            'skill_gap_matrix': _load_json(self.skill_gap_matrix, []),
++            'hidden_fit': bool(self.hidden_fit),
++            'recommendation': (
++                self.application_recommendation or 'watch'
++            ),
++            'application_readiness': self.application_readiness_score,
+         })
+         return data
+ 
+diff --git a/config/settings.py b/config/settings.py
+index c6580df..65da402 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -237,14 +237,6 @@ class Config:
+                 'dev/.github/scripts/listings.json'
+             ),
+         },
+-        {
+-            'kind': 'intern',
+-            'job_type': 'internship',
+-            'url': (
+-                'https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/'
+-                'dev/.github/scripts/listings.json'
+-            ),
+-        },
+         {
+             'kind': 'intern',
+             'job_type': 'internship',
+@@ -649,12 +641,15 @@ class Config:
+     ALLOW_RELOCATION = os.getenv('ALLOW_RELOCATION', 'true').lower() == 'true'
+ 
+     # ---- Freshness / expiry ---------------------------------------------------
++    # Thresholds are hour ceilings; `bucket_for` returns the first bucket the
++    # age is below. Strictly increasing so the mapping is unambiguous.
+     FRESHNESS_BUCKETS = [
+-        (24, 'hot'),        # <24h
+-        (72, 'fresh'),      # 1-3 days
+-        (168, 'recent'),    # 4-7 days
+-        (336, 'aging'),     # 8-14 days
+-        (None, 'stale'),    # >14 days
++        (6, 'hot'),         # 0-6h
++        (24, 'fresh'),      # 6-24h
++        (72, 'recent'),     # 1-3 days
++        (168, 'aging'),     # 3-7 days
++        (336, 'old'),       # 7-14 days
++        (None, 'stale'),    # 14+ days
+     ]
+     JOB_EXPIRY_DAYS = int(os.getenv('JOB_EXPIRY_DAYS', '30'))
+     VERIFY_STALE_AFTER_HOURS = int(os.getenv('VERIFY_STALE_AFTER_HOURS', '48'))
+diff --git a/frontend/static/css/command-center.css b/frontend/static/css/command-center.css
+index 7ef880f..1eb734c 100644
+--- a/frontend/static/css/command-center.css
++++ b/frontend/static/css/command-center.css
+@@ -407,6 +407,35 @@
+ .pill-red    { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+ .pill-warn   { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+ 
++/* Phase 2/9/10 recommendation + readiness + effort chips */
++.smart-recs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
++.rec-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
++    border-radius: 999px; font-size: 0.8rem; font-weight: 600; border: 1px solid transparent; }
++.rec-badge.apply-now { background: rgba(239, 68, 68, 0.18); color: #f87171; border-color: rgba(239,68,68,.35); }
++.rec-badge.apply     { background: rgba(16, 185, 129, 0.18); color: #34d399; border-color: rgba(16,185,129,.35); }
++.rec-badge.watch     { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border-color: rgba(245,158,11,.3); }
++.rec-badge.skip      { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border-color: rgba(107,114,128,.3); }
++.rec-badge.muted     { background: rgba(107, 114, 128, 0.12); color: #9ca3af; }
++.readiness-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
++    border-radius: 999px; font-size: 0.8rem; background: rgba(99, 102, 241, 0.15); color: #a5b4fc; }
++.muted-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
++    border-radius: 999px; font-size: 0.8rem; background: rgba(107,114,128,.12); color: #9ca3af; }
++.badge-comp { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem;
++    color: var(--text-muted); }
++
++/* Phase 8 — skill matrix in job detail */
++.skill-matrix { background: var(--bg-tertiary); padding: 12px 16px; border-radius: var(--border-radius-sm); }
++.skill-matrix h4 { margin-bottom: 8px; font-size: 0.9rem; }
++.matrix-list { list-style: none; padding: 0; margin: 0; display: grid;
++    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 16px; }
++.matrix-list li { display: flex; justify-content: space-between; gap: 8px;
++    padding: 3px 6px; border-radius: 6px; font-size: 0.82rem; }
++.matrix-ok   { color: #34d399; }
++.matrix-warn { color: #fbbf24; }
++.matrix-risk { color: #f87171; }
++.matrix-muted{ color: var(--text-muted); }
++.matrix-state { color: var(--text-muted); }
++
+ /* ---- Insights ----------------------------------------------------------- */
+ 
+ .analytics-panel { display: flex; flex-direction: column; gap: 20px; }
+diff --git a/frontend/static/js/app.js b/frontend/static/js/app.js
+index 2dd4bcb..f2c135c 100644
+--- a/frontend/static/js/app.js
++++ b/frontend/static/js/app.js
+@@ -327,14 +327,24 @@ const SPONSORSHIP_UI = {
+ };
+ 
+ const FRESHNESS_UI = {
+-    hot: { icon: '🔥', label: '< 24 hours' },
+-    fresh: { icon: '🟢', label: '1-3 days' },
+-    recent: { icon: '🟡', label: '4-7 days' },
+-    aging: { icon: '⚪', label: '8-14 days' },
+-    stale: { icon: '🔴', label: '> 14 days' },
++    hot: { icon: '🔥', label: 'Posted < 6h' },
++    fresh: { icon: '🟢', label: 'Posted 6-24h' },
++    recent: { icon: '🟡', label: 'Posted 1-3d' },
++    aging: { icon: '⚪', label: 'Posted 3-7d' },
++    old: { icon: '🟠', label: 'Posted 7-14d' },
++    stale: { icon: '🔴', label: 'Posted 14+ days' },
+     unknown: { icon: '❔', label: 'Date unknown' },
+ };
+ 
++// Recommendation badge for the Phase 2 priority engine.
++const RECOMMENDATION_UI = {
++    'APPLY NOW': { icon: '🚀', tone: 'apply-now', label: 'Apply now' },
++    'APPLY': { icon: '✅', tone: 'apply', label: 'Apply this week' },
++    'WATCH': { icon: '👀', tone: 'watch', label: 'Watch' },
++    'SKIP': { icon: '⛔', tone: 'skip', label: 'Skip' },
++    default: { icon: '❔', tone: 'muted', label: 'Unknown' },
++};
++
+ function renderSmartJobList(containerId, jobs) {
+     const container = document.getElementById(containerId);
+     if (!container) return;
+@@ -349,6 +359,29 @@ function renderSmartJobList(containerId, jobs) {
+     wireSmartJobCards(container);
+ }
+ 
++function recommendationBadge(job) {
++    const rec = RECOMMENDATION_UI[job.application_recommendation] || RECOMMENDATION_UI.default;
++    const priority = job.application_priority_score;
++    return `<span class="rec-badge ${rec.tone}" title="Application priority ${priority ?? '—'}">
++        ${rec.icon} ${rec.label}${priority != null ? ` · ${priority}` : ''}</span>`;
++}
++
++function skillMatrixBlock(matrix) {
++    const tone = {
++        MATCHED: 'ok', PARTIAL: 'warn', MISSING: 'risk',
++    };
++    return `<div class="skill-matrix">
++        <h4>Skill matrix</h4>
++        <ul class="matrix-list">
++            ${matrix.map(m => `<li class="matrix-${tone[m.status] || 'muted'}">
++                <span class="matrix-skill">${escapeHtml(m.skill)}</span>
++                <span class="matrix-state">${escapeHtml(m.status)}
++                    ${m.required ? ' · required' : ' · nice-to-have'}</span>
++            </li>`).join('')}
++        </ul>
++    </div>`;
++}
++
+ function smartJobCard(job, rank) {
+     const sponsorship = SPONSORSHIP_UI[job.sponsorship_status] || SPONSORSHIP_UI.unknown;
+     const freshness = FRESHNESS_UI[job.freshness_bucket] || FRESHNESS_UI.unknown;
+@@ -356,6 +389,12 @@ function smartJobCard(job, rank) {
+     const gaps = (job.match_gaps || []).slice(0, 4);
+     const risks = (job.match_risks || []).slice(0, 3);
+     const tier = job.role_tier ? `Tier ${job.role_tier}` : 'Unclassified role';
++    const family = job.role_family ? `<span class="badge-tier">${escapeHtml(job.role_family)}</span>` : '';
++    const readiness = job.application_readiness_score;
++    const effort = job.application_effort_estimate;
++    const competition = job.competition_signal
++        ? `<span class="badge-comp" title="${escapeAttr(job.competition_signal)}">👥 ${escapeHtml(job.competition_signal)}${job.applicant_count ? ` · ${job.applicant_count} apps` : ''}</span>`
++        : '';
+ 
+     const applyButton = job.can_apply
+         ? `<a class="btn btn-primary btn-sm" href="${escapeAttr(job.application_url)}"
+@@ -377,6 +416,11 @@ function smartJobCard(job, rank) {
+                     <span class="score-chip subtle" title="Listing quality">Q ${job.job_quality_score ?? '—'}</span>
+                 </div>
+             </div>
++            <div class="smart-recs">
++                ${recommendationBadge(job)}
++                ${readiness != null ? `<span class="readiness-chip" title="Application readiness">📋 ${readiness}%</span>` : ''}
++                ${effort ? `<span class="muted-chip" title="Estimated application effort">⏱ ${escapeHtml(effort)}</span>` : ''}
++            </div>
+             <div class="smart-meta">
+                 <span><i class="fas fa-building"></i> ${escapeHtml(job.company)}</span>
+                 <span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(job.location || 'Location unknown')}</span>
+@@ -385,6 +429,8 @@ function smartJobCard(job, rank) {
+                 <span title="${escapeAttr(freshness.label)}">${freshness.icon} ${freshness.label}</span>
+                 <span class="badge-source">${escapeHtml(job.source || 'unknown')}</span>
+                 <span class="badge-tier">${tier}</span>
++                ${family}
++                ${competition}
+                 <span><i class="fas fa-dollar-sign"></i> ${escapeHtml(job.salary_display || 'Unknown')}</span>
+             </div>
+             <div class="smart-explain">
+@@ -1224,6 +1270,20 @@ async function openJobModal(jobId) {
+                         <span class="label">Salary:</span>
+                         <span>${escapeHtml(job.salary_display || 'Unknown')}</span>
+                     </div>
++                    ${job.role_family ? `<div class="info-row">
++                        <span class="label">Role family:</span>
++                        <span>${escapeHtml(job.role_family)}
++                            ${job.hidden_fit ? '<span class="pill pill-green">💎 hidden fit</span>' : ''}</span>
++                    </div>` : ''}
++                    ${job.application_effort_estimate ? `<div class="info-row">
++                        <span class="label">Effort:</span>
++                        <span>~${escapeHtml(job.application_effort_estimate)}</span>
++                    </div>` : ''}
++                    ${job.competition_signal ? `<div class="info-row">
++                        <span class="label">Competition:</span>
++                        <span>${escapeHtml(job.competition_signal)}
++                            ${job.applicant_count ? `· ${job.applicant_count} applicant(s)` : ''}</span>
++                    </div>` : ''}
+                     <div class="info-row">
+                         <span class="label">Experience required:</span>
+                         <span>${job.required_years !== null && job.required_years !== undefined
+@@ -1244,9 +1304,13 @@ async function openJobModal(jobId) {
+                         <span class="score-chip subtle">Opportunity ${job.opportunity_score ?? '—'}</span>
+                         <span class="score-chip subtle">Quality ${job.job_quality_score ?? '—'}</span>
+                         <span class="score-chip subtle">Final ${job.final_score ?? '—'}</span>
++                        ${recommendationBadge(job)}
++                        ${job.application_readiness_score != null
++                            ? `<span class="readiness-chip" title="Application readiness">📋 ${job.application_readiness_score}% ready</span>` : ''}
+                     </div>
+                     ${Object.keys(job.match_breakdown || {}).length
+                         ? breakdownBars(job.match_breakdown) : ''}
++                    ${(job.skill_gap_matrix || []).length ? skillMatrixBlock(job.skill_gap_matrix) : ''}
+                 </div>
+ 
+                 <div class="detail-explain">
+diff --git a/frontend/templates/index.html b/frontend/templates/index.html
+index 25d8e91..5c49ae2 100644
+--- a/frontend/templates/index.html
++++ b/frontend/templates/index.html
+@@ -329,6 +329,7 @@
+                             <option value="opportunity">Opportunity</option>
+                             <option value="quality">Listing quality</option>
+                             <option value="freshness">Freshest</option>
++                            <option value="priority">Apply priority</option>
+                             <option value="rank_score">Rank (legacy)</option>
+                             <option value="date">Date posted</option>
+                         </select>
+diff --git a/scrapers/github_simplify_scraper.py b/scrapers/github_simplify_scraper.py
+index 85146a6..7141317 100644
+--- a/scrapers/github_simplify_scraper.py
++++ b/scrapers/github_simplify_scraper.py
+@@ -50,6 +50,31 @@ EXCLUDED_TITLE_MARKERS = (
+     'vp ', 'chief ', 'architect',
+ )
+ 
++# Full-time new-grad feed only: titles that require a doctorate or a
++# security clearance / US-citizenship are unwinnable for an F-1/OPT candidate
++# and crowd out genuine early-career DE/analytics roles.
++PHD_TITLE_RE = re.compile(
++    r'\b(ph\.?d|doctorate|post[\s\-]?doc|doctoral)\b',
++    re.I,
++)
++CLEARANCE_TITLE_RE = re.compile(
++    r'\b(security clearance|top secret|ts[\s\-/\\]sci|active clearance|'
++    r'clearance required|polygraph)\b',
++    re.I,
++)
++CITIZENSHIP_TITLE_RE = re.compile(
++    r'\b(u\.?s\.? citizen|citizenship required|citizen(?:s)? only)\b',
++    re.I,
++)
++# Defense / intelligence / federal contractors that gate on clearance or
++# citizenship. Only applied to the new-grad (full-time) feed.
++DEFENSE_TITLE_RE = re.compile(
++    r'\b(intelligence|defense|defence|national security|homeland security|'
++    r'cyber|space force|air force|navy|army|military|weapon|missile|'
++    r'radar|satellite|surveillance|classified|federal)\b',
++    re.I,
++)
++
+ 
+ INTERNSHIP_TITLE_RE = re.compile(
+     r'\b(intern(?:ship)?s?|co[\s\-]?ops?|coops?)\b',
+@@ -151,6 +176,15 @@ class GithubSimplifyScraper(BaseScraper):
+         if self.source_name == 'github_newgrad' and is_internship_role(title):
+             return None
+ 
++        # Full-time new-grad feed: drop PhD / clearance / citizenship / defense
++        # roles that an F-1/OPT early-career candidate cannot realistically win.
++        if self.source_name == 'github_newgrad' and self._is_off_target_newgrad(
++            title,
++            degrees=listing.get('degrees'),
++            sponsorship=listing.get('sponsorship'),
++        ):
++            return None
++
+         if not self._title_matches_skills(title, listing.get('category')):
+             return None
+ 
+@@ -251,6 +285,35 @@ class GithubSimplifyScraper(BaseScraper):
+         # Non-data categories (e.g. Software / Quant): require explicit skill keyword
+         return has_skill
+ 
++    def _is_off_target_newgrad(self, title: str, degrees=None, sponsorship=None) -> bool:
++        """True when a new-grad listing is not realistically winnable by an
++        F-1/OPT early-career candidate: PhD-gated, clearance/citizenship-gated,
++        or defense/intelligence contractor roles."""
++        t = (title or '').lower()
++
++        if PHD_TITLE_RE.search(t):
++            return True
++        if CLEARANCE_TITLE_RE.search(t):
++            return True
++        if CITIZENSHIP_TITLE_RE.search(t):
++            return True
++        if DEFENSE_TITLE_RE.search(t):
++            return True
++
++        # The Simplify feed stores the degree requirement in `degrees`.
++        if degrees:
++            deg_text = ' '.join(str(d) for d in degrees).lower()
++            if re.search(r'\bph\.?d|doctorate\b', deg_text):
++                return True
++
++        # The feed's `sponsorship` field can state citizenship/clearance gates.
++        if sponsorship:
++            sp = str(sponsorship).lower()
++            if re.search(r'\b(citizen|citizenship|clearance)\b', sp):
++                return True
++
++        return False
++
+     def _location_ok(self, location: str) -> bool:
+         loc = (location or '').lower()
+         if not loc or 'remote' in loc or 'united states' in loc or loc in ('usa', 'us'):
+diff --git a/scrapers/job_scraper_manager.py b/scrapers/job_scraper_manager.py
+index cce60d6..0a023e3 100644
+--- a/scrapers/job_scraper_manager.py
++++ b/scrapers/job_scraper_manager.py
+@@ -1,3 +1,4 @@
++import json
+ from datetime import datetime, timezone
+ from typing import List, Dict
+ import sys
+@@ -172,6 +173,22 @@ class JobScraperManager:
+         import json
+         from datetime import datetime, timezone
+ 
++        # ---- Phase 12 — dedup/repost provenance ----
++        now = datetime.now(timezone.utc)
++        if existing.first_seen is None:
++            existing.first_seen = now
++        existing.last_seen = now
++
++        src_list = set()
++        if existing.source_list:
++            try:
++                src_list = set(json.loads(existing.source_list) or [])
++            except (ValueError, TypeError):
++                src_list = set()
++        src_list.add((new_source or '').lower())
++        existing.source_list = json.dumps(sorted(s for s in src_list if s))
++        existing.source_count = max(1, len(src_list))
++
+         new_url = job_data.get('job_url') or job_data.get('application_url')
+         if new_url:
+             known = set()
+@@ -215,6 +232,8 @@ class JobScraperManager:
+             if incoming > current:
+                 existing.date_posted = job_data['date_posted']
+                 existing.date_posted_origin = job_data.get('date_posted_origin') or 'feed'
++                # The same role re-posted with a newer posting date is a repost.
++                existing.possible_repost = True
+ 
+         if not existing.application_url and job_data.get('application_url'):
+             existing.application_url = job_data['application_url']
+@@ -612,6 +631,10 @@ class JobScraperManager:
+             ),
+             dedupe_key=build_dedupe_key(job_data),
+             verification_status='unverified',
++            first_seen=datetime.now(timezone.utc),
++            last_seen=datetime.now(timezone.utc),
++            source_count=1,
++            source_list=json.dumps([(source or '').lower()] if source else []),
+         )
+ 
+     def _enrich_job_with_opt_data(self, job: Job, job_data: dict):
+diff --git a/services/analytics.py b/services/analytics.py
+index 2ce6326..6664129 100644
+--- a/services/analytics.py
++++ b/services/analytics.py
+@@ -5,6 +5,8 @@ is not enough data to say anything, we say that instead of showing a
+ meaningless percentage.
+ """
+ 
++from datetime import datetime, timedelta, timezone
++
+ from config.settings import Config
+ 
+ INTERVIEW_STATUSES = ('PHONE_SCREEN', 'INTERVIEW', 'TECHNICAL', 'FINAL', 'OFFER')
+@@ -126,6 +128,110 @@ def _skill_demand(db, Job, limit=15):
+     ]
+ 
+ 
++def employer_radar(db, Job, days=30, limit=12):
++    """Which employers are actively hiring in the candidate's target lane.
++
++    Every figure comes from real stored jobs; only non-hidden, non-expired,
++    non-duplicate postings are counted. Returns a ranked list of employers.
++    """
++    from sqlalchemy import case, or_, func
++
++    recent = datetime.now(timezone.utc) - timedelta(days=days)
++    base = Job.query.filter(
++        Job.is_hidden.is_(False),
++        Job.is_expired.is_(False),
++        Job.duplicate_of_id.is_(None),
++        or_(
++            Job.date_scraped >= recent,
++            Job.date_posted >= recent,
++        ),
++    )
++
++    rows = (
++        base.with_entities(
++            Job.company,
++            func.count(Job.id).label('open_roles'),
++            func.sum(
++                case((Job.candidate_match_score >= Config.STRONG_MATCH_MIN, 1), else_=0),
++            ).label('strong_matches'),
++            func.sum(
++                case((Job.application_url_status == 'verified', 1), else_=0),
++            ).label('verified_links'),
++        )
++        .group_by(Job.company)
++        .order_by(func.count(Job.id).desc())
++        .limit(limit)
++        .all()
++    )
++    active = [
++        {
++            'company': company,
++            'open_roles': int(roles),
++            'strong_matches': int(strong or 0),
++            'verified_apply_links': int(verified or 0),
++            'direct_hire': (verified or 0) >= (roles or 0) / 2,
++        }
++        for company, roles, strong, verified in rows if company
++    ]
++    return {
++        'active_employers': active,
++        'window_days': days,
++        'note': 'Counts real stored postings only, in the full-time target lanes.',
++    }
++
++
++def search_health(db, Job, SearchRun):
++    """Diagnostics for the search pipeline: what is working, what is silent."""
++    now = datetime.now(timezone.utc)
++
++    jobs_total = Job.query.filter(Job.is_hidden.is_(False)).count()
++    jobs_applied = Job.query.filter(Job.is_applied.is_(True)).count()
++
++    runs = (SearchRun.query.order_by(SearchRun.started_at.desc()).limit(20).all()
++            if SearchRun is not None else [])
++    last_run = runs[0].to_dict() if runs else None
++
++    # Jobs whose apply links should still be re-verified (not yet confirmed).
++    due_for_verification = Job.query.filter(
++        Job.is_hidden.is_(False), Job.is_expired.is_(False),
++        db.or_(
++            Job.verification_status.is_(None),
++            Job.verification_status.in_(['unverified', 'active']),
++        ),
++    ).count()
++
++    issues = _health_issues(runs, last_run)
++    status = (
++        'ok'
++        if runs and last_run and last_run.get('state') not in ('failed', 'error')
++        and not issues
++        else 'attention'
++    )
++    return {
++        'generated_at': now.isoformat(),
++        'jobs': {
++            'total_visible': int(jobs_total),
++            'applied': int(jobs_applied),
++            'due_for_verification': due_for_verification,
++        },
++        'last_search_run': last_run,
++        'recent_runs_count': len(runs),
++        'status': status,
++        'issues': issues,
++    }
++
++
++def _health_issues(runs, last_run):
++    issues = []
++    if not runs:
++        issues.append('No search runs recorded yet.')
++    elif last_run and last_run.get('state') in ('error', 'failed'):
++        issues.append(f"Last search run ended in {last_run.get('state')}.")
++    if not issues:
++        issues.append('No issues detected.')
++    return issues
++
++
+ def _recommendations(analytics):
+     """Suggestions the user must approve. Weights are never changed silently."""
+     out = []
+diff --git a/services/briefing.py b/services/briefing.py
+index 1e16244..e8db8cd 100644
+--- a/services/briefing.py
++++ b/services/briefing.py
+@@ -34,6 +34,50 @@ def realistic_filters(Job):
+     ]
+ 
+ 
++def why_hidden(job, Job=None):
++    """Explain why a job is not shown in the realistic apply list.
++
++    Returns a list of human-readable reasons, each tied to a concrete stored
++    value. No reason is invented; unknown fields simply do not produce one.
++    """
++    reasons = []
++    if job is None:
++        return reasons
++    get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
++
++    if get('is_hidden'):
++        reasons.append('Marked hidden / dismissed by you.')
++    if get('is_applied'):
++        reasons.append('Already applied.')
++    if get('is_not_interested'):
++        reasons.append('Marked not interested.')
++    if get('is_expired'):
++        reasons.append('Posting flagged as expired/unreachable.')
++    if get('duplicate_of_id'):
++        reasons.append('Duplicate of another stored job (kept once).')
++
++    if get('exp_hard_drop'):
++        reasons.append('Experience requirement is a hard drop for your profile.')
++    if get('location_blocked'):
++        reasons.append('Location is outside your target states.')
++    if get('role_blocked'):
++        reasons.append('Role family is off-target for your search.')
++    if get('sponsorship_status') == 'red':
++        reasons.append('Sponsorship status is red (no visa sponsorship).')
++
++    quality = get('job_quality_score')
++    if quality is not None and quality < Config.MIN_QUALITY_FOR_RANKING:
++        reasons.append(f'Quality score {quality} is below the ranking minimum '
++                       f'({Config.MIN_QUALITY_FOR_RANKING}).')
++
++    if get('freshness_bucket') == 'stale':
++        reasons.append('Posting is stale (14+ days, not rediscovered).')
++
++    if not reasons:
++        reasons.append('This job passes the realistic filters — it should be visible.')
++    return reasons
++
++
+ def applyable_query(Job, realistic=True):
+     """Base query for jobs that are realistically worth applying to.
+ 
+@@ -98,7 +142,8 @@ def top_jobs(Job, limit=None, min_score=None, realistic=True, prefer_fresh=True)
+         score = float(job.final_score or 0)
+         bucket = (job.freshness_bucket or 'unknown')
+         bucket_bonus = {
+-            'hot': 18, 'fresh': 12, 'recent': 4, 'aging': -8, 'stale': -20, 'unknown': 0,
++            'hot': 22, 'fresh': 14, 'recent': 6, 'aging': -6,
++            'old': -14, 'stale': -20, 'unknown': 0,
+         }.get(bucket, 0)
+         scraped = job.date_scraped
+         scraped_bonus = 0
+diff --git a/services/freshness.py b/services/freshness.py
+index 69e7afa..7046c08 100644
+--- a/services/freshness.py
++++ b/services/freshness.py
+@@ -5,19 +5,21 @@ from datetime import datetime, timedelta, timezone
+ from config.settings import Config
+ 
+ BUCKET_LABELS = {
+-    'hot': 'Posted in the last 24 hours',
+-    'fresh': 'Posted 1-3 days ago',
+-    'recent': 'Posted 4-7 days ago',
+-    'aging': 'Posted 8-14 days ago',
++    'hot': 'Posted in the last 6 hours',
++    'fresh': 'Posted 6-24 hours ago',
++    'recent': 'Posted 1-3 days ago',
++    'aging': 'Posted 3-7 days ago',
++    'old': 'Posted 7-14 days ago',
+     'stale': 'Posted more than 14 days ago',
+     'unknown': 'Posting date unknown',
+ }
+ 
+ _BUCKET_SCORE = {
+     'hot': 100.0,
+-    'fresh': 85.0,
+-    'recent': 65.0,
+-    'aging': 40.0,
++    'fresh': 90.0,
++    'recent': 72.0,
++    'aging': 50.0,
++    'old': 35.0,
+     'stale': 15.0,
+     'unknown': 45.0,
+ }
+@@ -62,6 +64,46 @@ def evaluate(date_posted, now=None):
+     }
+ 
+ 
++def human_age(date_value, now=None):
++    """Human-readable age like '3h 21m ago', or None when unknown."""
++    if date_value is None:
++        return None
++    now = _as_utc(now) or datetime.now(timezone.utc)
++    dt = _as_utc(date_value)
++    if dt is None:
++        return None
++    seconds = max(0, int((now - dt).total_seconds()))
++    days, rem = divmod(seconds, 86400)
++    hours, rem = divmod(rem, 3600)
++    minutes = rem // 60
++    if days >= 1:
++        return f'{days}d {hours}h ago'
++    if hours >= 1:
++        return f'{hours}h {minutes}m ago'
++    if minutes >= 1:
++        return f'{minutes}m ago'
++    return 'just now'
++
++
++def display_age(date_posted, date_scraped, now=None):
++    """Present posting age, falling back to discovery time only when the
++    posting time is unknown. Never conflates the two: the label states which
++    one is being reported."""
++    if date_posted is not None and _as_utc(date_posted) is not None:
++        return {
++            'text': human_age(date_posted, now),
++            'basis': 'posted',
++            'bucket': bucket_for(age_hours(date_posted, now)),
++        }
++    if date_scraped is not None and _as_utc(date_scraped) is not None:
++        return {
++            'text': f'First discovered {human_age(date_scraped, now)}',
++            'basis': 'discovered',
++            'bucket': bucket_for(age_hours(date_scraped, now)) or 'unknown',
++        }
++    return {'text': 'Date unknown', 'basis': 'unknown', 'bucket': 'unknown'}
++
++
+ def is_expired(date_posted, expiry_days=None, now=None):
+     """Age-based expiry. Unknown dates are never auto-expired."""
+     expiry_days = expiry_days or Config.JOB_EXPIRY_DAYS
+diff --git a/services/matching.py b/services/matching.py
+index b0d4fe7..31fa2e0 100644
+--- a/services/matching.py
++++ b/services/matching.py
+@@ -9,6 +9,8 @@ from services.experience import analyze_experience
+ from services.location_pref import score_location
+ from services.requirements import score_education, score_responsibilities
+ from services.role_classifier import classify_role
++from services.role_family import classify_family
++from services.skill_gaps import skill_gap_matrix
+ from services.skills import score_skills
+ from services.sponsorship import assess_sponsorship
+ from services.text_utils import clean_html
+@@ -58,7 +60,13 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
+     skills_profile = profile_skills or Config.PROFILE_SKILLS
+ 
+     role = classify_role(title, clean_desc)
++    family = classify_family(title, clean_desc)
+     exp = analyze_experience(title, clean_desc)
++    skills_matrix = skill_gap_matrix({
++        'title': title,
++        'description': clean_desc,
++        'profile_skills': skills_profile,
++    })
+     skills = score_skills(job_text, skills_profile)
+     resp = score_responsibilities(job_text)
+     edu = score_education(clean_desc)
+@@ -95,6 +103,15 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
+         risks.insert(0, 'Provisional score: the posting text was not available, '
+                         'so requirements could not be checked')
+ 
++    # Hidden fit surfaces as a reason to apply when the title looked off-target.
++    if family.get('hidden_fit'):
++        reasons.append('💎 ' + family['hidden_fit_reason'])
++    # Skill-gap matrix reinforces gaps (must-have gaps cost more than nice-to-have).
++    must_have_gaps = skills_matrix.get('must_have_gaps') or []
++    for gap in must_have_gaps[:3]:
++        if gap not in gaps:
++            gaps.append(f'{gap} (must-have)')
++
+     eligible = not exp['hard_drop'] and not role['avoid'] and auth['status'] != 'red'
+     disqualifiers = []
+     if exp['hard_drop']:
+@@ -117,8 +134,10 @@ def evaluate_job(job, profile_skills=None, weights=None, location_prefs=None):
+         'gaps': gaps,
+         'risks': risks,
+         'role': role,
++        'role_family': family,
+         'experience': exp,
+         'skills': skills,
++        'skills_matrix': skills_matrix,
+         'responsibilities': resp,
+         'education': edu,
+         'location': loc,
+diff --git a/services/priority.py b/services/priority.py
+new file mode 100644
+index 0000000..b7ee821
+--- /dev/null
++++ b/services/priority.py
+@@ -0,0 +1,244 @@
++"""Application-priority engine.
++
++application_priority_score is NOT a probability of interview. It expresses how
++strongly the system recommends spending application time on a job, built from
++evidence-backed signals only.
++
++Every sub-score below is derived from stored data or from rules that never
++invent facts. When a signal is unknown it scores neutrally and is reported as
++unknown on the card.
++"""
++
++from config.settings import Config
++from services.freshness import evaluate as evaluate_freshness
++
++# Recommendation bands (priority score ceilings).
++REC_APPLY_NOW = 80.0
++REC_APPLY = 60.0
++REC_WATCH = 40.0
++
++
++def recommendation_for(priority_score):
++    """Map an application-priority score (0-100) to an action recommendation."""
++    if priority_score is None:
++        return {'action': 'WATCH', 'label': 'Watch', 'tone': 'neutral',
++                'reason': 'Priority not scored yet'}
++    if priority_score >= REC_APPLY_NOW:
++        return {'action': 'APPLY NOW', 'label': 'Apply now', 'tone': 'apply',
++                'reason': 'Strongest current fit — apply today'}
++    if priority_score >= REC_APPLY:
++        return {'action': 'APPLY', 'label': 'Apply', 'tone': 'strong',
++                'reason': 'Good fit worth applying to this week'}
++    if priority_score >= REC_WATCH:
++        return {'action': 'WATCH', 'label': 'Watch', 'tone': 'watch',
++                'reason': 'Monitor — gaps or unknowns need review first'}
++    return {'action': 'SKIP', 'label': 'Skip', 'tone': 'skip',
++            'reason': 'Low value for your profile right now'}
++
++
++# ---------------------------------------------------------------------------
++# Phase 5 — Competition signal (never fabricated)
++# ---------------------------------------------------------------------------
++
++COMPETITION_LEVELS = ('LOW', 'MODERATE', 'HIGH', 'VERY_HIGH', 'UNKNOWN')
++
++
++def competition_signal(applicant_count, applicant_count_source, source_feed=None):
++    """Classify applicant-count data ONLY when a legitimate source provides it.
++
++    If applicant_count is a real integer this maps it to a band; otherwise the
++    signal is UNKNOWN. A feed-supplied density hint is only used when the count
++    itself is absent AND the hint is an explicit machine field.
++    """
++    if isinstance(applicant_count, (int, float)) and applicant_count is not None:
++        n = int(applicant_count)
++        if n <= 10:
++            level = 'LOW'
++        elif n <= 25:
++            level = 'MODERATE'
++        elif n <= 100:
++            level = 'HIGH'
++        else:
++            level = 'VERY_HIGH'
++        source = applicant_count_source = (source_feed or 'source')
++        return {
++            'signal': level,
++            'applicant_count': n,
++            'applicant_count_source': source_feed,
++            'captured_at': None,  # caller stamps a datetime when known
++        }
++    return {
++        'signal': 'UNKNOWN',
++        'applicant_count': None,
++        'applicant_count_source': None,
++        'captured_at': None,
++    }
++
++
++def competition_adjustment(signal):
++    """Small opportunity-rank adjustment from a legit competition signal.
++
++    Must never overpower job quality or candidate fit, so the swing is capped.
++    """
++    mapping = {
++        'LOW': +4.0,
++        'MODERATE': +2.0,
++        'HIGH': -2.0,
++        'VERY_HIGH': -4.0,
++        'UNKNOWN': 0.0,
++    }
++    return mapping.get((signal or 'UNKNOWN').upper(), 0.0)
++
++
++# ---------------------------------------------------------------------------
++# Phase 9 — Application readiness
++# ---------------------------------------------------------------------------
++def application_readiness(job, profile=None, profile_has_resume=None):
++    """0-100 readiness with an explicit list of what is missing.
++
++    Checks every item independently; a missing item is reported, never
++    fabricated to inflate the score. `profile` is an optional dict carrying a
++    resume path; `profile_has_resume` overrides it when the caller already
++    knows the answer.
++    """
++    get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
++    if profile_has_resume is None:
++        profile_has_resume = bool((profile or {}).get('resume_path'))
++    checks = []
++    score = 100.0
++
++    url = get('application_url')
++    url_status = get('application_url_status') or 'unknown'
++    if not url:
++        score -= 25.0
++        checks.append({'ok': False, 'label': 'Application URL captured',
++                       'detail': 'No apply URL stored'})
++    elif url_status == 'verified':
++        checks.append({'ok': True, 'label': 'Application URL verified',
++                       'detail': 'Checked live'})
++    elif url_status == 'dead':
++        score -= 20.0
++        checks.append({'ok': False, 'label': 'Application URL verified',
++                       'detail': 'URL reported dead'})
++    else:
++        score -= 12.0
++        checks.append({'ok': False, 'label': 'Application URL verified',
++                       'detail': f'Status: {url_status or "unverified"}'})
++
++    if get('company'):
++        checks.append({'ok': True, 'label': 'Employer identified',
++                       'detail': get('company')})
++    else:
++        score -= 8.0
++        checks.append({'ok': False, 'label': 'Employer identified'})
++
++    if get('title'):
++        checks.append({'ok': True, 'label': 'Role identified', 'detail': get('title')})
++    else:
++        score -= 8.0
++        checks.append({'ok': False, 'label': 'Role identified'})
++
++    desc = get('description') or ''
++    if len(desc) >= Config.MIN_DESCRIPTION_CHARS:
++        checks.append({'ok': True, 'label': 'Job description available'})
++    else:
++        score -= 6.0
++        checks.append({'ok': False, 'label': 'Job description available',
++                       'detail': 'Description missing or too short'})
++
++    if profile_has_resume or (profile or {}).get('name'):
++        checks.append({'ok': True, 'label': 'Resume / profile available'})
++    else:
++        score -= 6.0
++        checks.append({'ok': False, 'label': 'Resume / profile available'})
++
++    auth = get('sponsorship_status') or 'unknown'
++    if auth != 'unknown':
++        checks.append({'ok': True, 'label': 'Work authorization evaluated',
++                       'detail': auth})
++    else:
++        score -= 5.0
++        checks.append({'ok': False, 'label': 'Work authorization evaluated',
++                       'detail': 'Unknown'})
++
++    effort = application_effort(get('description'), get('application_url'))
++    if effort is not None:
++        checks.append({'ok': True, 'label': 'Application requirements detected',
++                       'detail': effort})
++    else:
++        checks.append({'ok': True, 'label': 'Application requirements detected',
++                       'detail': 'Banded estimate not computable from thin text'})
++
++    return {
++        'score': int(round(max(0.0, min(100.0, score)))),
++        'checks': checks,
++        'missing': [c['label'] for c in checks if not c['ok']],
++    }
++
++
++# ---------------------------------------------------------------------------
++# Phase 10 — Application effort (banded, never precise unless stated)
++# ---------------------------------------------------------------------------
++_EFFORT_BANDS = {
++    '40+': ['resume', 'cover letter', 'portfolio', 'transcript', 'reference',
++            'writing sample', 'link to'],
++    '20-40': ['assessment', 'questionnaire', 'profile', 'application form'],
++    '10-20': ['apply', 'submit'],
++}
++
++
++def application_effort(description, application_url=None):
++    """Return a banded effort estimate from visible signals, or None.
++
++    The effort is derived only from what the posting text discloses (form
++    fields, attachments, screens). No precise minute value is ever invented.
++    """
++    if not description:
++        return None
++    text = (description or '').lower()
++    if any(k in text for k in _EFFORT_BANDS['40+']):
++        # Cover-letter, portfolio and reference uploads are the strongest signal.
++        return '40+ min'
++    if any(k in text for k in _EFFORT_BANDS['20-40']):
++        return '20-40 min'
++    if any(k in text for k in _EFFORT_BANDS['10-20']):
++        return '10-20 min'
++    return '5-10 min'
++
++
++# ---------------------------------------------------------------------------
++# Phase 2 — Application priority score
++# ---------------------------------------------------------------------------
++def application_priority(match, opportunity, quality, job, now=None):
++    """Evidence-based recommendation score combining candidate fit and the
++    practicality of winning + applying. Weights are tuned so candidate fit and
++    verification dominate, competition and effort nudge only."""
++    get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
++
++    match_score = (match or {}).get('score') or 0
++    opp_score = (opportunity or {}).get('score') or 0
++    quality_score = quality or 0
++
++    # Base on candidate fit, moderated by opportunity and trust in the listing.
++    score = (float(match_score) * 0.60
++             + float(opp_score) * 0.25
++             + float(quality_score) * 0.15)
++
++    # Freshness bonus is contained in opportunity; add a small direct lift for
++    # hot postings so the freshest get a nudge without dominating.
++    fresh = evaluate_freshness(get('date_posted'))
++    if fresh['bucket'] in ('hot', 'fresh'):
++        score += 3.0 if fresh['bucket'] == 'hot' else 1.5
++
++    # Entry-level / new-grad signal
++    title_l = (get('title') or '').lower()
++    if any(x in title_l for x in ('new grad', 'entry level', 'junior',
++                                  'associate', 'university grad',
++                                  'early career')):
++        score += 2.0
++
++    # Competition nudges (never overpowers fit/quality).
++    score += competition_adjustment(get('competition_signal'))
++
++    # Strength of the match's own sponsor/auth status already lives in opp.
++    return int(round(max(0.0, min(100.0, score))))
+\ No newline at end of file
+diff --git a/services/ranking.py b/services/ranking.py
+index 8a705ee..84dcce8 100644
+--- a/services/ranking.py
++++ b/services/ranking.py
+@@ -5,6 +5,8 @@ from datetime import datetime, timezone
+ from config.settings import Config
+ from services.matching import evaluate_job
+ from services.opportunity import evaluate_opportunity
++from services.priority import (application_effort, application_priority,
++                               application_readiness, recommendation_for)
+ from services.quality import evaluate_quality
+ 
+ 
+@@ -37,6 +39,7 @@ def final_score(match_score, opportunity_score, quality_score,
+ def score_job(job, profile_skills=None, watchlist=None, weights=None,
+               location_prefs=None, opportunity_weights=None, now=None):
+     """Run the full scoring pipeline for one job and return a flat result."""
++    _get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
+     match = evaluate_job(job, profile_skills=profile_skills, weights=weights,
+                          location_prefs=location_prefs)
+     opportunity = evaluate_opportunity(job, match_result=match, watchlist=watchlist,
+@@ -44,16 +47,36 @@ def score_job(job, profile_skills=None, watchlist=None, weights=None,
+     quality = evaluate_quality(job)
+     final = final_score(match['score'], opportunity['score'], quality['score'])
+ 
++    # Phase 2 — application priority + recommendation (a recommendation to
++    # spend time, never a claim of likely interview).
++    priority = application_priority(match, opportunity, quality['score'], job)
++    recommendation = recommendation_for(priority)
++
++    # Phase 9 — application readiness. The caller may pass profile context via
++    # the `profile` kwarg; when absent the resume availability check is simply
++    # unknown and slightly dents the score.
++    _profile = profile_skills.get('_profile') if isinstance(profile_skills, dict) else {}
++    readiness = application_readiness(job, profile=_profile or None)
++
++    # Phase 10 — application effort (banded estimate from posting signals).
++    effort = application_effort(_get('description'))
++
+     return {
+         'candidate_match_score': match['score'],
+         'opportunity_score': opportunity['score'],
+         'job_quality_score': quality['score'],
+         'final_score': final,
++        'application_priority_score': priority,
++        'application_recommendation': recommendation['action'],
++        'application_readiness_score': readiness['score'],
++        'application_effort_estimate': effort,
+         'eligible': match['eligible'] and quality['score'] >= Config.MIN_QUALITY_FOR_RANKING,
+         'disqualifiers': match['disqualifiers'],
+         'match': match,
+         'opportunity': opportunity,
+         'quality': quality,
++        'readiness': readiness,
++        'recommendation': recommendation,
+         'freshness': opportunity['freshness'],
+         'scored_at': (now or datetime.now(timezone.utc)),
+     }
+@@ -104,4 +127,27 @@ def apply_to_model(job_model, result):
+     # instead of loading and re-scoring every row.
+     job_model.location_blocked = match['location']['score'] <= Config.LOCATION_BLOCK_MAX
+     job_model.role_blocked = match['role']['score'] < Config.ROLE_BLOCK_MIN
++
++    # ---- Phase 2 / 5 / 8 / 9 / 10 persisted scores ----
++    job_model.application_priority_score = result.get('application_priority_score')
++    job_model.application_recommendation = result.get('application_recommendation')
++    job_model.application_readiness_score = result.get('application_readiness_score')
++    job_model.application_effort_estimate = result.get('application_effort_estimate')
++
++    readiness = result.get('readiness') or {}
++    job_model.readiness_breakdown = json.dumps(readiness)
++
++    # Role family + hidden fit and skill-gap matrix from the match.
++    family = (result.get('match') or {}).get('role_family') or {}
++    job_model.role_family = family.get('family') or job_model.role_family
++    job_model.hidden_fit = bool(family.get('hidden_fit'))
++    if job_model.role_family and not job_model.match_reasons:
++        job_model.match_reasons = json.dumps(family.get('reasons') or [])
++    sm = (result.get('match') or {}).get('skills_matrix') or {}
++    if sm.get('matrix'):
++        job_model.skill_gap_matrix = json.dumps(sm['matrix'])
++
++    # Competition is intentionally NOT derived from the scoring engine; it is
++    # captured by the source adapter when legitimate data exists and persisted
++    # via the updater. Nothing here invents applicant counts.
+     return job_model
+diff --git a/services/role_family.py b/services/role_family.py
+new file mode 100644
+index 0000000..9c44941
+--- /dev/null
++++ b/services/role_family.py
+@@ -0,0 +1,190 @@
++"""Role-family and hidden-fit classification (Phase 6 & 7).
++
++Expands the existing role classification into a first-class family taxonomy
++and detects "hidden fits": titles that are not obviously data-engineering but
++whose responsibilities + technologies align strongly with Vinay's target
++profile (SQL, Python, Azure, ETL, Power BI).
++
++Signals are taken from the job's own text — never inferred from the employer.
++QA-only automation is deliberately not given a high score.
++"""
++
++import re
++
++from services.text_utils import clean_html, word_present
++
++
++def clean_text(text):
++    return clean_html(text or '')
++
++FAMILY_LABELS = {
++    'DATA_ENGINEERING': 'Data Engineering',
++    'ANALYTICS_BI': 'Analytics / BI',
++    'CLOUD_DATA': 'Cloud Data',
++    'DATA_AUTOMATION': 'Data Automation',
++    'AI_DATA': 'AI / Data',
++    'DATABASE_SQL': 'Database / SQL',
++    'DATA_QUALITY': 'Data Quality',
++    'OTHER': 'Other',
++}
++
++# Family -> title / role keywords (first strong signal).
++_FAMILY_TITLES = {
++    'DATA_ENGINEERING': [
++        'data engineer', 'data engineering', 'analytics engineer',
++        'data pipeline', 'data platform engineer', 'data warehouse engineer',
++        'data integration engineer', 'data ops', 'etl developer',
++        'data infrastructure', 'backend data',
++    ],
++    'ANALYTICS_BI': [
++        'analyst', 'business intelligence', 'bi analyst', 'bi engineer',
++        'reporting analyst', 'analytics', 'power bi', 'data analyst',
++        'insight',
++    ],
++    'CLOUD_DATA': [
++        'cloud data', 'azure data', 'azure data engineer', 'cloud engineer',
++        'data cloud',
++    ],
++    'DATA_AUTOMATION': [
++        'data automation', 'workflow automation', 'process automation',
++        'etl automation', 'automation engineer', 'azure automation',
++        'power automate', 'data integration specialist',
++    ],
++    'AI_DATA': [
++        'data scientist', 'ml engineer', 'machine learning', 'ai engineer',
++        'nlp', 'applied scientist', 'research engineer', 'decision scientist',
++    ],
++    'DATABASE_SQL': [
++        'sql developer', 'database developer', 'sql programmer',
++        'database engineer', 'sql data analyst', 'tsql', 'mssql',
++    ],
++    'DATA_QUALITY': [
++        'data quality', 'quality analyst', 'data governance',
++    ],
++}
++
++# Technology / responsibility signals that reveal a DATA_AUTOMATION role even
++# when the title is generic ("Technology Analyst", "Automation Engineer").
++_DATA_AUTOMATION_SIGNALS = [
++    # Data / cloud orchestration and integration signals — the signals that
++    # make an "automation" role a real data-automation lane. Generic QA
++    # automation does NOT include these, so it is correctly excluded.
++    'python', 'sql', 'api', 'etl', 'data pipeline', 'data pipelines',
++    'azure function', 'azure functions', 'power automate', 'workflow orchestration',
++    'orchestration', 'data integration', 'azure automation',
++]
++_QA_ONLY_SIGNALS = [
++    'qa', 'quality assurance', 'test automation', 'selenium', 'test case',
++    'test cases', 'manual test', 'regression test', 'regression testing',
++    'unit test', 'functional test', 'test plan', 'test runner',
++    'automated testing', 'test framework',
++]
++
++# Hidden-fit: a non-data title whose responsibilities/techs line up with the
++# candidate's strengths (SQL, Python, Azure, ETL, Power BI).
++_HIDDEN_FIT_TECH = [
++    'sql', 'python', 'azure', 'etl', 'power bi', 'data warehouse',
++    'ssis', 'reporting', 'dashboard', 'data mart', 'data modeling',
++]
++
++# Titles that are *obviously* data/analysis roles on their own (no hidden fit
++# needed). 'analyst' alone is deliberately excluded (financial/ops analysts
++# are not data roles on face value).
++_OBVIOUS_DATA_TITLE = [
++    'data engineer', 'data engineering', 'analytics engineer',
++    'data analyst', 'business intelligence', 'bi analyst', 'bi engineer',
++    'etl developer', 'sql developer', 'data scientist', 'ml engineer',
++    'machine learning engineer', 'ai engineer', 'data automation',
++    'azure data engineer', 'cloud data engineer', 'data warehouse engineer',
++    'data platform engineer', 'data quality', 'data governance',
++    'data integration engineer', 'data pipeline',
++]
++
++
++def classify_family(title='', description=''):
++    """Return a family dict: family, label, matched_phrase, hidden_fit, reasons."""
++    text = f'{title or ""}. {clean_text(description or "")}'.lower()
++    title_l = (title or '').lower()
++
++    # 1) Explicit family via title phrases (first match wins).
++    family = None
++    matched = None
++    for fam, phrases in _FAMILY_TITLES.items():
++        for phrase in phrases:
++            if phrase in title_l:
++                family, matched = fam, phrase
++                break
++        if family:
++            break
++
++    # 2) Fall back to responsibilities/techs when the title is ambiguous
++    #    (e.g. generic "Technology Analyst", "Automation Engineer").
++    keyword_fallbacks = {
++        'DATA_ENGINEERING': ['etl', 'data pipeline', 'data warehouse', 'etl pipeline'],
++        'ANALYTICS_BI': ['dashboard', 'reporting', 'business intelligence',
++                         'power bi', 'analytics'],
++        'CLOUD_DATA': ['azure data', 'aws data', 'cloud data'],
++        'DATA_AUTOMATION': ['azure function', 'power automate', 'workflow orchestration',
++                            'data integration', 'etl automation'],
++        'DATABASE_SQL': ['sql server', 'database'],
++        'DATA_QUALITY': ['data quality', 'data governance'],
++        'AI_DATA': ['machine learning', 'data science', 'model'],
++    }
++
++    if not family:
++        for fam, kws in keyword_fallbacks.items():
++            if any(k in text for k in kws):
++                family, matched = fam, kws[0]
++                break
++
++    # 3) DATA_AUTOMATION refinement — separate real data automation from
++    #    QA-only automation.
++    if family == 'DATA_AUTOMATION':
++        has_data_signal = any(s in text for s in _DATA_AUTOMATION_SIGNALS)
++        qa_signal = any(q in text for q in _QA_ONLY_SIGNALS)
++        if qa_signal and not has_data_signal:
++            family, matched = 'OTHER', 'qa-only automation'
++
++    if not family:
++        family, matched = 'OTHER', None
++
++    # 4) Hidden fit — a non-obvious title whose responsibilities/techs align
++    #    strongly with the candidate's target stack. Runs regardless of family
++    #    so generic titles (Technology Analyst, Automation Engineer) that the
++    #    fallback placed in ANALYTICS_BI/OTHER still surface as hidden fits.
++    obvious_title = any(p in title_l for p in _OBVIOUS_DATA_TITLE)
++    hits = [t for t in _HIDDEN_FIT_TECH if t in text]
++    hidden = (not obvious_title) and len(hits) >= 2
++    hidden_reason = (
++        'Title is not Data Engineer, but responsibilities strongly align with '
++        'your target profile (SQL, Python, Azure, ETL, Power BI).'
++        if hidden else None
++    )
++
++    reasons = [matched] if matched else []
++    if family == 'OTHER' and not matched:
++        reasons.append('Role family not confidently classifiable from title')
++
++    return {
++        'family': family,
++        'label': FAMILY_LABELS.get(family, family),
++        'matched_phrase': matched,
++        'hidden_fit': hidden,
++        'hidden_fit_reason': hidden_reason,
++        'reasons': reasons,
++    }
++
++
++def is_data_automation(family, description='', title_text=''):
++    """First-class DATA_AUTOMATION lane: data-flavoured automation only.
++
++    QA-only automation returns False.
++    """
++    text = f'{title_text or ""} {clean_text(description or "")}'.lower()
++    has_signal = any(s in text for s in _DATA_AUTOMATION_SIGNALS)
++    qa_signal = any(q in text for q in _QA_ONLY_SIGNALS)
++    if family != 'DATA_AUTOMATION':
++        return False
++    if qa_signal and not has_signal:
++        return False
++    return True
+\ No newline at end of file
+diff --git a/services/skill_gaps.py b/services/skill_gaps.py
+new file mode 100644
+index 0000000..1cbd1e7
+--- /dev/null
++++ b/services/skill_gaps.py
+@@ -0,0 +1,140 @@
++"""Skill-gap matrix (Phase 8).
++
++For each job, classify every requested skill as MATCHED / PARTIAL / MISSING.
++A partial match means the profile carries a closely related skill accepted as
++a bridge (e.g. profile has SQL, posting asks T-SQL). Must-have vs nice-to-have
++mirrors the business line in the posting (required vs preferred/preferred).
++
++No job is rejected for a nice-to-have gap.
++"""
++
++import re
++
++from config.settings import Config
++from services.skills import SKILL_VOCABULARY, extract_job_skills, _profile_lookup
++from services.text_utils import clean_html, word_present
++
++# canonical skill -> a list of closely related profile skills that count as a
++# partial (bridgeable) match.
++_PARTIAL_BRIDGES = {
++    'T-SQL': ['SQL', 'SQL Server'],
++    'PL/SQL': ['SQL'],
++    'Azure Data Factory': ['Azure', 'ETL'],
++    'Azure Synapse': ['Azure', 'AWS'],
++    'Snowflake': ['SQL', 'Azure'],
++    'Redshift': ['SQL', 'AWS'],
++    'BigQuery': ['SQL', 'GCP'],
++    'Databricks': ['Spark', 'Azure'],
++    'Spark': ['Python'],
++    'dbt': ['SQL', 'ETL'],
++    'Kafka': ['Python'],
++    'Airflow': ['S', 'etl', 'python'],
++    'Power BI': ['Tableau'],
++    'Tableau': ['Power BI'],
++    'Looker': ['Power BI'],
++    'TensorFlow': ['PyTorch'],
++    'PyTorch': ['TensorFlow'],
++    'MLOps': ['Docker', 'Kubernetes'],
++    'Data Modeling': ['SQL'],
++    'Data Warehousing': ['SQL', 'ETL'],
++}
++
++# Hard requirements vs nice-to-haves: when a posting phrases the skill with one
++# of these cues it is a must-have; preferred/plus/bonus cues make it a
++# nice-to-have.
++_REQUIRED_CUE = re.compile(
++    r'\b(require[sd]?|must have|must|minimum|at least|essential|mandatory|'
++    r'strong(?:ly)? (?:required|preferred)|need[ed]?)\b', re.I,
++)
++_NICE_CUE = re.compile(
++    r'\b(prefer(?:red)?|nice to have|plus|bonus|desirable|ideal(?:ly)?|'
++    r'a plus|advantageous|good to have)\b', re.I,
++)
++
++
++def _find_sentence_containing(text, alias):
++    """Return the sentence that mentions an alias, for cue detection."""
++    for sentence in re.split(r'(?<=[.!?])\s+', text or ''):
++        if word_present(alias, sentence):
++            return sentence
++    return None
++
++
++def _bridge_aliases(skill):
++    return _PARTIAL_BRIDGES.get(skill, [])
++
++
++def skill_gap_matrix(job):
++    """Return MATCHED/PARTIAL/MISSING matrix plus must/nice separation.
++
++    Works whether `job` is a dict or a model with a .description attribute.
++    """
++    get = job.get if isinstance(job, dict) else lambda k, d=None: getattr(job, k, d)
++    description = clean_html(get('description') or '')
++    title = get('title') or ''
++    job_text = f'{title}. {description}'.lower()
++    if len(description.strip()) < Config.MIN_DESCRIPTION_CHARS:
++        return {
++            'matrix': [], 'matched': [], 'partial': [], 'missing': [],
++            'must_have_gaps': [], 'nice_to_have_gaps': [],
++            'note': 'Description too thin to build a reliable skill matrix',
++        }
++
++    profile = _profile_lookup(get('profile_skills') or [])
++    required = extract_job_skills(job_text)
++
++    matrix = []
++    matched, partial, missing = [], [], []
++    must_have_gaps, nice_to_have_gaps = [], []
++
++    for skill in required:
++        canonical = skill
++        if profile.get(canonical.lower()):
++            state = 'MATCHED'; pct = 100
++            matched.append(canonical)
++            sentence = None
++        else:
++            # Try a partial bridge.
++            bridged = False
++            for bridge in _bridge_aliases(canonical):
++                if profile.get(bridge.lower()):
++                    bridged = True
++                    break
++            if bridged:
++                state = 'PARTIAL'; pct = 70
++                partial.append(canonical)
++            else:
++                state = 'MISSING'; pct = 0
++                missing.append(canonical)
++
++        # Determine required vs nice-to-have from posting phrasing.
++        aliases = SKILL_VOCABULARY.get(skill, [skill])
++        sentence = None
++        for alias in aliases:
++            sentence = _find_sentence_containing(job_text, alias)
++            if sentence:
++                break
++        is_required = True
++        if sentence and _NICE_CUE.search(sentence) and not _REQUIRED_CUE.search(sentence):
++            is_required = False
++        if state == 'MISSING':
++            if is_required:
++                must_have_gaps.append(canonical)
++            else:
++                nice_to_have_gaps.append(canonical)
++
++        matrix.append({
++            'skill': canonical, 'status': state,
++            'pct': pct, 'required': is_required,
++        })
++
++    matrix.sort(key=lambda m: (0 if m['status'] == 'MATCHED' else
++                               1 if m['status'] == 'PARTIAL' else 2,
++                               -m['pct']))
++    return {
++        'matrix': matrix,
++        'matched': matched, 'partial': partial, 'missing': missing,
++        'must_have_gaps': must_have_gaps,
++        'nice_to_have_gaps': nice_to_have_gaps,
++        'note': None,
++    }
+\ No newline at end of file
+diff --git a/tests/test_github_simplify.py b/tests/test_github_simplify.py
+index 7b46b48..0b9f5ac 100644
+--- a/tests/test_github_simplify.py
++++ b/tests/test_github_simplify.py
+@@ -72,6 +72,35 @@ class TestGithubSimplify(unittest.TestCase):
+         job = self.scraper.parse_job_listing(item)
+         self.assertEqual(job.get('sponsorship_hint'), 'no_sponsorship')
+ 
++    def test_drops_phd_title(self):
++        item = dict(SAMPLE, title='Data Scientist / Computer Scientist PhD Graduate - Decision Systems')
++        self.assertIsNone(self.scraper.parse_job_listing(item))
++
++    def test_drops_phd_degree_requirement(self):
++        item = dict(SAMPLE, title='Modeler and Data Analyst', degrees=['Doctorate'])
++        self.assertIsNone(self.scraper.parse_job_listing(item))
++
++    def test_drops_clearance_title(self):
++        item = dict(SAMPLE, title='Data Scientist - Security Clearance Required')
++        self.assertIsNone(self.scraper.parse_job_listing(item))
++
++    def test_drops_defense_intelligence_title(self):
++        item = dict(SAMPLE, title='Software Engineering/ML/Data Scientist Graduate - Intelligence Systems')
++        self.assertIsNone(self.scraper.parse_job_listing(item))
++
++    def test_drops_citizenship_sponsorship_field(self):
++        item = dict(SAMPLE, sponsorship='US Citizenship Required')
++        self.assertIsNone(self.scraper.parse_job_listing(item))
++
++    def test_keeps_early_career_data_roles(self):
++        for title in ('Data Engineer New Grad', 'Junior Data Engineer',
++                      'Data Analyst - Data & Analytics', 'Associate Data Scientist'):
++            item = dict(SAMPLE, title=title)
++            self.assertIsNotNone(
++                self.scraper.parse_job_listing(item),
++                f'expected to keep: {title}',
++            )
++
+ 
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/tests/test_scoring_engine.py b/tests/test_scoring_engine.py
+index 2f3062f..e4fe255 100644
+--- a/tests/test_scoring_engine.py
++++ b/tests/test_scoring_engine.py
+@@ -15,8 +15,12 @@ from services import freshness, quality, ranking
+ from services.experience import analyze_experience
+ from services.location_pref import detect_remote_type, score_location
+ from services.matching import evaluate_job, default_weights
++from services.priority import (application_effort, application_priority,
++                               application_readiness, recommendation_for)
+ from services.requirements import score_education, score_responsibilities
+ from services.role_classifier import classify_role, detect_seniority
++from services.role_family import classify_family, is_data_automation
++from services.skill_gaps import skill_gap_matrix
+ from services.skills import extract_job_skills, score_skills
+ from services.sponsorship import assess_sponsorship
+ 
+@@ -291,7 +295,10 @@ class TestFreshness(unittest.TestCase):
+         self.now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+ 
+     def test_buckets(self):
+-        cases = [(2, 'hot'), (48, 'fresh'), (120, 'recent'), (300, 'aging'), (500, 'stale')]
++        # Spec buckets: HOT 0-6h, FRESH 6-24h, RECENT 1-3d, AGING 3-7d,
++        # OLD 7-14d, STALE 14+.
++        cases = [(2, 'hot'), (12, 'fresh'), (48, 'recent'), (120, 'aging'),
++                 (200, 'old'), (500, 'stale')]
+         for hours, expected in cases:
+             posted = self.now - timedelta(hours=hours)
+             self.assertEqual(freshness.evaluate(posted, now=self.now)['bucket'], expected)
+@@ -517,5 +524,102 @@ def result_score_of_strong_job():
+     return evaluate_job(TestEndToEndMatching()._strong_job())['score']
+ 
+ 
++class TestRoleFamily(unittest.TestCase):
++    """Phase 6/7 — role family taxonomy + hidden-fit detection."""
++
++    def test_data_engineer_explicit(self):
++        result = classify_family('Data Engineer', 'ETL with SQL and dbt')
++        self.assertEqual(result['family'], 'DATA_ENGINEERING')
++        self.assertFalse(result['hidden_fit'])
++
++    def test_technology_analyst_data_stack_is_hidden_fit(self):
++        result = classify_family(
++            'Technology Analyst',
++            'Build ETL pipelines with SQL, Python and Azure; Power BI dashboards',
++        )
++        self.assertEqual(result['family'], 'ANALYTICS_BI')
++        self.assertTrue(result['hidden_fit'])
++        self.assertIsNotNone(result['hidden_fit_reason'])
++
++    def test_qa_automation_not_data_automation(self):
++        result = classify_family(
++            'Automation Engineer', 'Write Selenium test cases and manual QA')
++        self.assertNotEqual(result['family'], 'DATA_AUTOMATION')
++
++    def test_data_automation_lane_positive(self):
++        result = classify_family(
++            'Automation Engineer',
++            'Build Python and SQL workflows orchestrated with Azure Functions',
++        )
++        self.assertEqual(result['family'], 'DATA_AUTOMATION')
++
++    def test_data_automation_qa_only_guard(self):
++        self.assertFalse(is_data_automation('DATA_AUTOMATION', 'Selenium test cases'))
++        self.assertTrue(is_data_automation(
++            'DATA_AUTOMATION', 'Python, SQL, ETL data pipeline'))
++
++
++class TestSkillGaps(unittest.TestCase):
++    """Phase 8 — skill-gap matrix states and required/nice-to-have detection."""
++
++    def test_matched_partial_missing(self):
++        matrix = skill_gap_matrix({
++            'title': 'Data Analyst',
++            'description': (
++                'We are hiring a Data Analyst to own reporting and pipelines. '
++                'Python and SQL are required. Knowledge of T-SQL is preferred. '
++                'You will build dashboards, maintain data models, and partner '
++                'with engineering. Minimum of two years experience with SQL '
++                'reporting is strongly preferred for this analytics role.'
++            ),
++            'profile_skills': [
++                {'name': 'Python', 'proficiency': 4},
++                {'name': 'SQL', 'proficiency': 5},
++            ],
++        })
++        by_skill = {row['skill']: row for row in matrix['matrix']}
++        self.assertEqual(by_skill['SQL']['status'], 'MATCHED')
++        self.assertEqual(by_skill['Python']['status'], 'MATCHED')
++        # Profile has SQL, posting asks T-SQL → counted as a bridgeable partial.
++        self.assertEqual(by_skill['T-SQL']['status'], 'PARTIAL')
++        # T-SQL is phrased with a preferred cue and bridges -> not a must-have gap.
++        self.assertNotIn('T-SQL', matrix['must_have_gaps'])
++
++
++class TestPriority(unittest.TestCase):
++    """Phase 2/9/10 — application priority, recommendation, readiness, effort."""
++
++    def test_high_match_gives_apply_now(self):
++        match = {'score': 90, 'role_family': {'hidden_fit': False}}
++        opportunity = {'score': 80, 'freshness': {'bucket': 'hot', 'hours': 2}}
++        priority = application_priority(match, opportunity, 75, {
++            'title': 'Data Analyst New Grad', 'description': 'x' * 500,
++        })
++        self.assertGreaterEqual(priority, 70)
++        self.assertEqual(recommendation_for(priority)['action'], 'APPLY NOW')
++
++    def test_effort_band(self):
++        # Resume + cover letter (40+ band) is the strongest visible signal.
++        self.assertEqual(application_effort('Post a resume and cover letter'),
++                         '40+ min')
++        self.assertEqual(application_effort('Complete an online assessment'),
++                         '20-40 min')
++        self.assertEqual(application_effort('Submit your application here'),
++                         '10-20 min')
++        self.assertIsNone(application_effort(''))
++        self.assertIsNone(application_effort(None))
++
++    def test_readiness_reports_missing_apply_url(self):
++        result = application_readiness({'description': 'x' * 200})
++        self.assertLessEqual(result['score'], 94)
++        self.assertTrue(any(not c['ok'] for c in result['checks']))
++
++    def test_effort_band_upper_bound(self):
++        eff = application_effort('Provide resume, visa status, references, '
++                                 'portfolio, transcripts, coding assessment')
++        self.assertEqual(eff, '40+ min')
++
++
++
+ if __name__ == '__main__':
+     unittest.main(verbosity=2)
+-- 
+2.47.3

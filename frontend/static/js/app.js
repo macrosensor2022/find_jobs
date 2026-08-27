@@ -327,12 +327,22 @@ const SPONSORSHIP_UI = {
 };
 
 const FRESHNESS_UI = {
-    hot: { icon: '🔥', label: '< 24 hours' },
-    fresh: { icon: '🟢', label: '1-3 days' },
-    recent: { icon: '🟡', label: '4-7 days' },
-    aging: { icon: '⚪', label: '8-14 days' },
-    stale: { icon: '🔴', label: '> 14 days' },
+    hot: { icon: '🔥', label: 'Posted < 6h' },
+    fresh: { icon: '🟢', label: 'Posted 6-24h' },
+    recent: { icon: '🟡', label: 'Posted 1-3d' },
+    aging: { icon: '⚪', label: 'Posted 3-7d' },
+    old: { icon: '🟠', label: 'Posted 7-14d' },
+    stale: { icon: '🔴', label: 'Posted 14+ days' },
     unknown: { icon: '❔', label: 'Date unknown' },
+};
+
+// Recommendation badge for the Phase 2 priority engine.
+const RECOMMENDATION_UI = {
+    'APPLY NOW': { icon: '🚀', tone: 'apply-now', label: 'Apply now' },
+    'APPLY': { icon: '✅', tone: 'apply', label: 'Apply this week' },
+    'WATCH': { icon: '👀', tone: 'watch', label: 'Watch' },
+    'SKIP': { icon: '⛔', tone: 'skip', label: 'Skip' },
+    default: { icon: '❔', tone: 'muted', label: 'Unknown' },
 };
 
 function renderSmartJobList(containerId, jobs) {
@@ -349,6 +359,29 @@ function renderSmartJobList(containerId, jobs) {
     wireSmartJobCards(container);
 }
 
+function recommendationBadge(job) {
+    const rec = RECOMMENDATION_UI[job.application_recommendation] || RECOMMENDATION_UI.default;
+    const priority = job.application_priority_score;
+    return `<span class="rec-badge ${rec.tone}" title="Application priority ${priority ?? '—'}">
+        ${rec.icon} ${rec.label}${priority != null ? ` · ${priority}` : ''}</span>`;
+}
+
+function skillMatrixBlock(matrix) {
+    const tone = {
+        MATCHED: 'ok', PARTIAL: 'warn', MISSING: 'risk',
+    };
+    return `<div class="skill-matrix">
+        <h4>Skill matrix</h4>
+        <ul class="matrix-list">
+            ${matrix.map(m => `<li class="matrix-${tone[m.status] || 'muted'}">
+                <span class="matrix-skill">${escapeHtml(m.skill)}</span>
+                <span class="matrix-state">${escapeHtml(m.status)}
+                    ${m.required ? ' · required' : ' · nice-to-have'}</span>
+            </li>`).join('')}
+        </ul>
+    </div>`;
+}
+
 function smartJobCard(job, rank) {
     const sponsorship = SPONSORSHIP_UI[job.sponsorship_status] || SPONSORSHIP_UI.unknown;
     const freshness = FRESHNESS_UI[job.freshness_bucket] || FRESHNESS_UI.unknown;
@@ -356,6 +389,12 @@ function smartJobCard(job, rank) {
     const gaps = (job.match_gaps || []).slice(0, 4);
     const risks = (job.match_risks || []).slice(0, 3);
     const tier = job.role_tier ? `Tier ${job.role_tier}` : 'Unclassified role';
+    const family = job.role_family ? `<span class="badge-tier">${escapeHtml(job.role_family)}</span>` : '';
+    const readiness = job.application_readiness_score;
+    const effort = job.application_effort_estimate;
+    const competition = job.competition_signal
+        ? `<span class="badge-comp" title="${escapeAttr(job.competition_signal)}">👥 ${escapeHtml(job.competition_signal)}${job.applicant_count ? ` · ${job.applicant_count} apps` : ''}</span>`
+        : '';
 
     const applyButton = job.can_apply
         ? `<a class="btn btn-primary btn-sm" href="${escapeAttr(job.application_url)}"
@@ -377,6 +416,11 @@ function smartJobCard(job, rank) {
                     <span class="score-chip subtle" title="Listing quality">Q ${job.job_quality_score ?? '—'}</span>
                 </div>
             </div>
+            <div class="smart-recs">
+                ${recommendationBadge(job)}
+                ${readiness != null ? `<span class="readiness-chip" title="Application readiness">📋 ${readiness}%</span>` : ''}
+                ${effort ? `<span class="muted-chip" title="Estimated application effort">⏱ ${escapeHtml(effort)}</span>` : ''}
+            </div>
             <div class="smart-meta">
                 <span><i class="fas fa-building"></i> ${escapeHtml(job.company)}</span>
                 <span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(job.location || 'Location unknown')}</span>
@@ -385,6 +429,8 @@ function smartJobCard(job, rank) {
                 <span title="${escapeAttr(freshness.label)}">${freshness.icon} ${freshness.label}</span>
                 <span class="badge-source">${escapeHtml(job.source || 'unknown')}</span>
                 <span class="badge-tier">${tier}</span>
+                ${family}
+                ${competition}
                 <span><i class="fas fa-dollar-sign"></i> ${escapeHtml(job.salary_display || 'Unknown')}</span>
             </div>
             <div class="smart-explain">
@@ -1224,6 +1270,20 @@ async function openJobModal(jobId) {
                         <span class="label">Salary:</span>
                         <span>${escapeHtml(job.salary_display || 'Unknown')}</span>
                     </div>
+                    ${job.role_family ? `<div class="info-row">
+                        <span class="label">Role family:</span>
+                        <span>${escapeHtml(job.role_family)}
+                            ${job.hidden_fit ? '<span class="pill pill-green">💎 hidden fit</span>' : ''}</span>
+                    </div>` : ''}
+                    ${job.application_effort_estimate ? `<div class="info-row">
+                        <span class="label">Effort:</span>
+                        <span>~${escapeHtml(job.application_effort_estimate)}</span>
+                    </div>` : ''}
+                    ${job.competition_signal ? `<div class="info-row">
+                        <span class="label">Competition:</span>
+                        <span>${escapeHtml(job.competition_signal)}
+                            ${job.applicant_count ? `· ${job.applicant_count} applicant(s)` : ''}</span>
+                    </div>` : ''}
                     <div class="info-row">
                         <span class="label">Experience required:</span>
                         <span>${job.required_years !== null && job.required_years !== undefined
@@ -1244,9 +1304,13 @@ async function openJobModal(jobId) {
                         <span class="score-chip subtle">Opportunity ${job.opportunity_score ?? '—'}</span>
                         <span class="score-chip subtle">Quality ${job.job_quality_score ?? '—'}</span>
                         <span class="score-chip subtle">Final ${job.final_score ?? '—'}</span>
+                        ${recommendationBadge(job)}
+                        ${job.application_readiness_score != null
+                            ? `<span class="readiness-chip" title="Application readiness">📋 ${job.application_readiness_score}% ready</span>` : ''}
                     </div>
                     ${Object.keys(job.match_breakdown || {}).length
                         ? breakdownBars(job.match_breakdown) : ''}
+                    ${(job.skill_gap_matrix || []).length ? skillMatrixBlock(job.skill_gap_matrix) : ''}
                 </div>
 
                 <div class="detail-explain">
