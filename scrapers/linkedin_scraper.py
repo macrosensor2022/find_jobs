@@ -99,7 +99,7 @@ class LinkedInScraper(BaseScraper):
                     else:
                         date_posted = self.parse_relative_date(date_str)
             except (ValueError, TypeError):
-                date_posted = datetime.now(timezone.utc)
+                date_posted = None
 
         external_id = ''
         if job_url:

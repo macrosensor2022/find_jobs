@@ -68,12 +68,13 @@ def is_internship_role(title: str = '', job_type: str = '') -> bool:
 class GithubSimplifyScraper(BaseScraper):
     """Fetches one or more SimplifyJobs listings.json feeds."""
 
-    MAX_AGE_DAYS = 90
+    MAX_AGE_DAYS = 14  # keep the feed focused on currently open new-grad roles
 
     def __init__(self, feeds: List[dict] = None, source_name: str = 'github_newgrad'):
         super().__init__()
         self.source_name = source_name
         self.feeds = feeds or getattr(Config, 'GITHUB_SIMPLIFY_FEEDS', [])
+        self.excluded_states = list(getattr(Config, 'EXCLUDED_STATES', []))
         self.session.headers.update({
             'Accept': 'application/json',
             'User-Agent': 'JobTracker/1.0 (personal job search; +https://github.com/macrosensor2022)',
@@ -255,29 +256,47 @@ class GithubSimplifyScraper(BaseScraper):
         if not loc or 'remote' in loc or 'united states' in loc or loc in ('usa', 'us'):
             return True
 
-        excluded = [s.lower() for s in getattr(Config, 'EXCLUDED_STATES', ['CA', 'WA', 'OR'])]
-        # Portland ME is OK; Portland OR is not
-        if re.search(r'portland\s*,?\s*(or|oregon)\b', loc):
-            return False
-        if re.search(
-            r'\b(seattle|bellevue|redmond|san francisco|palo alto|mountain view|'
-            r'sunnyvale|sf|sfo|bay area)\b',
-            loc,
-        ):
-            return False
-        if re.search(r',\s*ca\b|\bcalifornia\b', loc):
-            return False
-        if re.search(r',\s*wa\b', loc) and 'washington, dc' not in loc and 'washington dc' not in loc:
-            return False
-        if re.search(r',\s*or\b|\boregon\b', loc):
+        excluded = [
+            s.upper() for s in (
+                self.excluded_states
+                if self.excluded_states is not None
+                else getattr(Config, 'EXCLUDED_STATES', [])
+            )
+        ]
+
+        # Portland ME is OK; Portland OR is not when OR is on the excluded list.
+        if 'OR' in excluded and re.search(r'portland\s*,?\s*(or|oregon)\b', loc):
             return False
 
-        # Prefer target metros / states
+        for match in re.finditer(r',\s*([a-z]{2})\b', loc):
+            code = match.group(1).upper()
+            if code == 'DC':
+                continue
+            if code in excluded:
+                if code == 'WA' and ('washington, dc' in loc or 'washington dc' in loc):
+                    continue
+                return False
+
+        state_names = {
+            'california': 'CA', 'oregon': 'OR', 'washington': 'WA',
+        }
+        for name, code in state_names.items():
+            if name in loc and code in excluded:
+                if code == 'WA' and ('dc' in loc or 'd.c' in loc):
+                    continue
+                return False
+
+        # Prefer target metros / states (ranking hint only; not a hard drop)
         target_hints = (
             'maine', ', me', 'boston', 'massachusetts', ', ma',
             'texas', ', tx', 'dallas', 'austin', 'houston',
             'connecticut', ', ct', 'hartford',
             'new jersey', ', nj', 'newark',
+            'new york', ', ny', 'nyc',
+            'pennsylvania', ', pa', 'philadelphia', 'pittsburgh',
+            'maryland', ', md', 'baltimore',
+            'virginia', ', va', 'arlington', 'alexandria', 'reston',
+            'washington, dc', 'washington dc', ', dc',
             'tennessee', ', tn', 'nashville',
             'north carolina', ', nc', 'charlotte',
             'ohio', ', oh', 'columbus',
@@ -285,7 +304,6 @@ class GithubSimplifyScraper(BaseScraper):
             'arizona', ', az', 'phoenix',
             'utah', ', ut', 'salt lake',
             'colorado', ', co', 'denver',
-            'new york', ', ny', 'nyc',
         )
         if any(h in loc for h in target_hints):
             return True
@@ -299,8 +317,6 @@ class GithubSimplifyScraper(BaseScraper):
         if any(f in loc for f in foreign) and 'remote' not in loc and 'united states' not in loc:
             return False
 
-        # Ambiguous US city without excluded state — keep (enrichment will hide if needed)
-        _ = excluded  # reserved for future state-code parsing
         return True
 
     def _parse_ts(self, value) -> Optional[datetime]:

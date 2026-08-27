@@ -6,7 +6,10 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
-OPT-oriented job search dashboard focused on **full-time new-grad / early-career** Data Engineering, Analytics, and BI roles. Co-op and internship titles are filtered out by default.
+OPT-oriented personal job-search **command center** for **full-time new-grad / early-career** Data Engineering, Analytics, and BI. Co-op and internship titles are filtered out by default.
+
+Open **Today** every morning to answer: *“What should I apply to today?”*  
+Full architecture notes: [docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md).
 
 Built with Flask + a responsive frontend. Repo: [macrosensor2022/find_jobs](https://github.com/macrosensor2022/find_jobs).
 
@@ -14,17 +17,24 @@ Built with Flask + a responsive frontend. Repo: [macrosensor2022/find_jobs](http
 
 ## Features
 
+### Morning command center
+- **Today briefing**: top ranked jobs, strong matches, follow-ups, notifications
+- **Run search now** + scheduled daily scrape (default 7:00 AM America/New_York)
+- **Apply Now** only after the stored application URL is live-verified (never invented)
+- **Prepare application**: tailored drafts for review — you submit on the official site
+
 ### Job Aggregation
 - **Multi-source scraping**: [SimplifyJobs GitHub new-grad lists](https://github.com/SimplifyJobs/New-Grad-Positions), ATS boards (Greenhouse/Lever/Ashby), RemoteOK, The Muse, Remotive, Arbeitnow, LinkedIn, Adzuna, JSearch
 - **Background scrapes**: UI stays usable; poll `/api/scrape/status` while jobs land in the DB
-- **Profile matching**: Skill + location + experience gate (drops senior / 3+ years; drops intern/co-op in FT mode)
-- **OPT intelligence**: E-Verify / H-1B LCA signals, sponsorship screens, metro opportunity scoring
-- **Dedup**: Cross-source URL + title/company dedup
+- **Explainable match**: skills / responsibilities / experience / education / role / location / authorization + WHY / GAPS
+- **OPT intelligence**: evidence-backed sponsorship status; E-Verify / LCA when loaded locally
+- **Dedup + quality**: prefer official postings; demote stale / unverified listings
 
 ### Job Management
-- Filter by source, location, date, match/rank score, application status
-- Favorites, notes, and application pipeline tracking
-- Freshness window (default last 7 days after scrape)
+- Filter by match, sponsorship, location, source, verified apply URL, favorites, applied
+- Applications tracker + follow-up reminders
+- Company watchlist + outcome insights
+- Freshness buckets (hot → stale)
 
 ## Tech Stack
 

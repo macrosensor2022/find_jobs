@@ -313,8 +313,8 @@ class NUWorksScraper(BaseScraper):
             date_elem = element.find_element(By.CSS_SELECTOR, ".date-posted, .posted-date, .date, [data-field='date']")
             date_text = date_elem.text.strip()
             date_posted = self.parse_relative_date(date_text)
-        except:
-            date_posted = datetime.now(timezone.utc)
+        except Exception:
+            date_posted = None
         
         if not title and not company:
             try:

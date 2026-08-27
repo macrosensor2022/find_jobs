@@ -12,7 +12,6 @@ from scrapers.linkedin_scraper import LinkedInScraper
 from scrapers.remoteok_scraper import RemoteOKScraper
 from scrapers.themuse_scraper import TheMuseScraper
 from scrapers.arbeitnow_scraper import ArbeitnowScraper
-from scrapers.nuworks_scraper import NUWorksScraper
 from scrapers.remotive_scraper import RemotiveScraper
 from scrapers.ats_scraper import AtsBoardScraper, GreenhouseScraper, LeverScraper, AshbyScraper
 from scrapers.adzuna_scraper import AdzunaScraper
@@ -26,7 +25,19 @@ from scrapers.location_utils import (
 from scrapers.metro_opportunity import (
     lookup_opportunity_score, compute_competition_score, compute_rank_score,
 )
-from backend.models import Job, SearchLog
+from backend.models import Job, SearchLog, SearchRun, SourceRun
+
+# NUWorks is disabled from the normal workflow (Selenium + Duo login). The
+# module is imported lazily so a missing Selenium install cannot break scrapes.
+try:
+    from scrapers.nuworks_scraper import NUWorksScraper
+except Exception:  # pragma: no cover - optional dependency
+    NUWorksScraper = None
+from services.dedupe import (
+    build_dedupe_key, normalize_url, prefer as prefer_source,
+)
+from services.freshness import is_expired as freshness_is_expired
+from services.ranking import apply_to_model, score_job
 import re
 
 
@@ -60,11 +71,171 @@ class JobScraperManager:
             'github_intern': GithubInternScraper(),
         }
         self.nuworks_scraper = None
-    
+        self._watchlist_cache = None
+        self._location_prefs_cache = None
+
     def init_nuworks(self, username: str = None, password: str = None):
+        """Opt-in only. NUWorks is excluded from the normal workflow."""
+        from config.settings import Config
+
+        if not getattr(Config, 'NUWORKS_ENABLED', False):
+            raise RuntimeError(
+                'NUWorks is disabled. Set NUWORKS_ENABLED=true to enable it.'
+            )
+        if NUWorksScraper is None:
+            raise RuntimeError('NUWorks scraper is unavailable in this build.')
         self.nuworks_scraper = NUWorksScraper(username, password)
         self.scrapers['nuworks'] = self.nuworks_scraper
 
+    def _watchlist(self):
+        """Target companies from the DB, falling back to the config seed."""
+        if self._watchlist_cache is not None:
+            return self._watchlist_cache
+        from config.settings import Config
+
+        entries = []
+        try:
+            from backend.models import WatchlistCompany
+            rows = WatchlistCompany.query.filter_by(is_active=True).all()
+            entries = [{'name': r.name, 'priority': r.priority} for r in rows]
+        except Exception:
+            entries = []
+        if not entries:
+            entries = [
+                {'name': name, 'priority': 2}
+                for name in getattr(Config, 'WATCHLIST_COMPANIES', [])
+            ]
+        self._watchlist_cache = entries
+        return entries
+
+    def _location_prefs(self):
+        """User-editable location prefs from the DB, else config defaults."""
+        if self._location_prefs_cache is not None:
+            return self._location_prefs_cache
+        prefs = None
+        try:
+            from backend.models import Preference
+            row = Preference.query.filter_by(key='location_preferences').first()
+            if row and isinstance(row.parsed, dict):
+                prefs = row.parsed
+        except Exception:
+            prefs = None
+        self._location_prefs_cache = prefs or {}
+        return self._location_prefs_cache
+
+    def _apply_location_prefs_to_scrapers(self):
+        """Keep source-level location skips in sync with the UI prefs."""
+        from config.settings import Config
+
+        prefs = self._location_prefs()
+        excluded = prefs.get('excluded_states') or getattr(Config, 'EXCLUDED_STATES', [])
+        for name in ('github_newgrad', 'github_intern'):
+            scraper = self.scrapers.get(name)
+            if scraper is not None:
+                scraper.excluded_states = list(excluded)
+
+    def _filter_and_score(self, jobs: List[Dict], min_score: int) -> List[Dict]:
+        """Score discovered jobs and keep the ones worth storing.
+
+        The same engine that powers the UI decides acceptance, so a job's
+        stored score always matches the reason it was kept. Quality is not a
+        gate here — it only affects ranking — because a thin description at
+        discovery time is not a reason to discard a real posting.
+        """
+        accepted = []
+        for job_data in jobs:
+            if not isinstance(job_data, dict) or not job_data.get('title'):
+                continue
+            try:
+                result = score_job(
+                    job_data,
+                    watchlist=self._watchlist(),
+                    location_prefs=self._location_prefs() or None,
+                )
+            except Exception:
+                logger.exception('Scoring failed for %s', job_data.get('title'))
+                continue
+            match = result['match']
+            job_data['match_score'] = result['candidate_match_score']
+            job_data['final_score'] = result['final_score']
+            job_data['exp_hard_drop'] = match['experience']['hard_drop']
+            job_data['matched_skills'] = match['skills']['matched']
+            if not match['eligible']:
+                continue
+            if result['candidate_match_score'] >= min_score:
+                accepted.append(job_data)
+        accepted.sort(key=lambda j: j.get('final_score') or 0, reverse=True)
+        return accepted
+
+    def _merge_duplicate(self, existing: Job, job_data: dict, new_source: str):
+        """Fold a duplicate into the stored job, preferring official postings."""
+        import json
+        from datetime import datetime, timezone
+
+        new_url = job_data.get('job_url') or job_data.get('application_url')
+        if new_url:
+            known = set()
+            if existing.alt_source_urls:
+                try:
+                    known = set(json.loads(existing.alt_source_urls) or [])
+                except (ValueError, TypeError):
+                    known = set()
+            if new_url != existing.job_url and new_url not in known:
+                known.add(new_url)
+                existing.alt_source_urls = json.dumps(sorted(known)[:10])
+
+        # A company ATS posting beats an aggregator copy of the same job.
+        if prefer_source(existing.source, new_source):
+            existing.source = new_source
+            if new_url:
+                existing.job_url = new_url
+                existing.source_url = job_data.get('source_url') or new_url
+                existing.application_url = job_data.get('application_url') or new_url
+                existing.application_url_status = (
+                    job_data.get('application_url_status') or 'unverified'
+                )
+            if job_data.get('external_id'):
+                existing.external_id = job_data['external_id']
+
+        # Fill in facts we did not previously have. Never overwrite a known
+        # value with an unknown one.
+        if existing.date_posted is None and job_data.get('date_posted'):
+            existing.date_posted = job_data['date_posted']
+            existing.date_posted_origin = job_data.get('date_posted_origin') or 'feed'
+        elif job_data.get('date_posted') and existing.date_posted:
+            # Prefer a newer known posting date when the feed has one
+            incoming = job_data['date_posted']
+            current = existing.date_posted
+            if getattr(incoming, 'tzinfo', None) is None:
+                from datetime import timezone as _tz
+                incoming = incoming.replace(tzinfo=_tz.utc)
+            if getattr(current, 'tzinfo', None) is None:
+                from datetime import timezone as _tz
+                current = current.replace(tzinfo=_tz.utc)
+            if incoming > current:
+                existing.date_posted = job_data['date_posted']
+                existing.date_posted_origin = job_data.get('date_posted_origin') or 'feed'
+
+        if not existing.application_url and job_data.get('application_url'):
+            existing.application_url = job_data['application_url']
+            existing.application_url_status = (
+                job_data.get('application_url_status') or 'unverified'
+            )
+        if len(existing.description or '') < len(job_data.get('description') or ''):
+            existing.description = job_data['description']
+            existing.description_partial = job_data.get('description_partial')
+
+        # Rediscovery: bump scrape time so "today / this week" filters and the
+        # morning briefing treat the job as freshly seen again.
+        existing.date_scraped = datetime.now(timezone.utc)
+        try:
+            from services.freshness import evaluate as evaluate_freshness, is_expired
+            fresh = evaluate_freshness(existing.date_posted)
+            existing.freshness_hours = fresh.get('hours')
+            existing.freshness_bucket = fresh.get('bucket')
+            existing.is_expired = bool(is_expired(existing.date_posted))
+        except Exception:
+            logger.debug('Freshness refresh failed for job %s', existing.id, exc_info=True)
     def _job_matches_locations(self, job_data: dict, locations: List[str]) -> bool:
         """Return True when a job location matches any requested location."""
         if not locations:
@@ -134,6 +305,20 @@ class JobScraperManager:
             existing = Job.query.filter_by(job_url=job_url).first()
             if existing:
                 return existing
+            normalized = normalize_url(job_url)
+            if normalized:
+                for candidate in Job.query.filter(
+                    Job.job_url.ilike(f'%{normalized.split("/")[-1]}%')
+                ).limit(25).all():
+                    if normalize_url(candidate.job_url) == normalized:
+                        return candidate
+
+        # Identity key: same employer + same role + same place, any source.
+        key = build_dedupe_key(job_data)
+        if key:
+            existing = Job.query.filter_by(dedupe_key=key).first()
+            if existing:
+                return existing
 
         if company and title:
             norm = _normalize_title(title)
@@ -164,6 +349,9 @@ class JobScraperManager:
         total_jobs = 0
         new_jobs = 0
         matched_jobs = 0
+        duplicates = 0
+        missing_apply_url = 0
+        match_scores = []
         errors = []
 
         # LinkedIn uses keyword × location iteration — cap locations to avoid
@@ -209,14 +397,17 @@ class JobScraperManager:
                         job for job in all_jobs if self._job_matches_locations(job, locations)
                     ]
 
-                matched = self.profile_matcher.filter_jobs_by_match(location_filtered, self.min_match_score)
+                matched = self._filter_and_score(location_filtered, self.min_match_score)
                 total_jobs += len(location_filtered)
                 matched_jobs += len(matched)
                 
                 for job_data in matched:
                     job_source = job_data.get('source') or source
+                    match_scores.append(job_data.get('match_score') or 0)
+                    if not job_data.get('application_url') and not job_data.get('job_url'):
+                        missing_apply_url += 1
                     existing = self._job_exists(job_source, job_data)
-                    
+
                     if not existing:
                         job = self._create_job_from_data(job_data, job_source)
                         try:
@@ -231,6 +422,9 @@ class JobScraperManager:
                         # Release SQLite write lock often so the UI stays responsive
                         if new_jobs % 10 == 0:
                             self.db_session.commit()
+                    else:
+                        duplicates += 1
+                        self._merge_duplicate(existing, job_data, job_source)
                     
                 log.jobs_found = len(location_filtered)
                 log.status = 'success'
@@ -310,13 +504,16 @@ class JobScraperManager:
                         jobs = scraper.search_jobs(keyword, location)
                         
                         # Filter by match score
-                        matched = self.profile_matcher.filter_jobs_by_match(jobs, self.min_match_score)
+                        matched = self._filter_and_score(jobs, self.min_match_score)
                         total_jobs += len(jobs)
                         matched_jobs += len(matched)
                         
                         for job_data in matched:
+                            match_scores.append(job_data.get('match_score') or 0)
+                            if not job_data.get('job_url'):
+                                missing_apply_url += 1
                             existing = self._job_exists(source, job_data)
-                            
+
                             if not existing:
                                 job = self._create_job_from_data(job_data, source)
                                 try:
@@ -328,6 +525,9 @@ class JobScraperManager:
                                     )
                                 self.db_session.add(job)
                                 new_jobs += 1
+                            else:
+                                duplicates += 1
+                                self._merge_duplicate(existing, job_data, source)
                             
                         log.jobs_found = len(jobs)
                         log.status = 'success'
@@ -360,6 +560,11 @@ class JobScraperManager:
             'total_found': total_jobs,
             'matched_jobs': matched_jobs,
             'new_jobs': new_jobs,
+            'duplicates': duplicates,
+            'missing_apply_url': missing_apply_url,
+            'avg_match': (
+                round(sum(match_scores) / len(match_scores), 1) if match_scores else None
+            ),
             'errors': errors
         }
     
@@ -374,12 +579,17 @@ class JobScraperManager:
             delta = datetime.now(timezone.utc) - dp
             freshness_hours = max(0, int(delta.total_seconds() / 3600))
 
+        job_url = job_data.get('job_url')
+        application_url = job_data.get('application_url')
+        if application_url is None:
+            application_url = job_url or None
+
         return Job(
             title=job_data.get('title'),
             company=job_data.get('company'),
             location=job_data.get('location'),
             description=job_data.get('description'),
-            job_url=job_data.get('job_url'),
+            job_url=job_url,
             source=source,
             salary_min=job_data.get('salary_min'),
             salary_max=job_data.get('salary_max'),
@@ -392,6 +602,16 @@ class JobScraperManager:
             market=job_data.get('market'),
             salary_predicted=job_data.get('salary_predicted'),
             description_partial=job_data.get('description_partial'),
+            source_url=job_data.get('source_url') or job_url or None,
+            application_url=application_url,
+            application_url_status=job_data.get('application_url_status') or (
+                'unverified' if application_url else 'unknown'
+            ),
+            date_posted_origin=job_data.get('date_posted_origin') or (
+                'feed' if date_posted else 'unknown'
+            ),
+            dedupe_key=build_dedupe_key(job_data),
+            verification_status='unverified',
         )
 
     def _enrich_job_with_opt_data(self, job: Job, job_data: dict):
@@ -408,24 +628,58 @@ class JobScraperManager:
         job.salary_predicted = job_data.get('salary_predicted')
         job.description_partial = job_data.get('description_partial')
 
-        # Experience gate (all markets)
-        exp = self.profile_matcher.evaluate_experience({
-            'title': job.title,
-            'description': job.description,
-        })
-        job.required_years = exp.get('required_years')
-        job.exp_hard_drop = exp.get('hard_drop')
-        if exp.get('hard_drop'):
-            job.is_hidden = True
-            job.match_score = 0
+        # Resolve the worksite before scoring so the location dimension can use
+        # a real state instead of re-parsing the raw text.
+        loc = canonicalize_location(job.location or '')
+        job.worksite_city = loc.get('city')
+        job.worksite_state = loc.get('state')
+        job.metro = loc.get('metro')
+        job.metro_code = loc.get('metro_code')
 
-        job.sponsorship_screen = self.profile_matcher.detect_sponsorship_screen(
-            job.title, job.description,
+        # Age-based expiry, only when we actually know the posting date.
+        job.is_expired = freshness_is_expired(job.date_posted)
+
+        # Explainable scoring: seven weighted dimensions + opportunity +
+        # quality, each stored with the evidence behind it.
+        job.dedupe_key = job.dedupe_key or build_dedupe_key(job_data)
+        scoring = score_job({
+            'title': job.title,
+            'company': job.company,
+            'location': job.location,
+            'description': job.description,
+            'source': job.source,
+            'date_posted': job.date_posted,
+            'is_remote': job.is_remote,
+            'worksite_state': loc.get('state'),
+            'salary_min': job.salary_min,
+            'salary_max': job.salary_max,
+            'salary_predicted': job.salary_predicted,
+            'description_partial': job.description_partial,
+            'application_url': job.application_url,
+            'application_url_status': job.application_url_status,
+            'verification_status': job.verification_status,
+            'is_expired': job.is_expired,
+            'duplicate_of_id': job.duplicate_of_id,
+            'competition_score': job.competition_score,
+            'sponsorship_hint': job_data.get('sponsorship_hint'),
+        }, watchlist=self._watchlist(), location_prefs=self._location_prefs() or None)
+        apply_to_model(job, scoring)
+
+        # Hide only genuine disqualifiers (experience / role / authorization).
+        # Excluded states are scored via location_blocked so the user can change
+        # location prefs in the UI without jobs being permanently hard-hidden.
+        if not scoring['match']['eligible']:
+            job.is_hidden = True
+
+        preferred = (
+            (self._location_prefs() or {}).get('preferred_states')
+            or getattr(Config, 'PREFERRED_STATES', None)
+            or getattr(Config, 'TARGET_STATES', [])
         )
-        # SimplifyJobs feed often includes an explicit sponsorship field
-        hint = (job_data.get('sponsorship_hint') or '').lower()
-        if hint in ('no_sponsorship', 'citizenship_required'):
-            job.sponsorship_screen = True
+        job.in_target_states = in_target_states(
+            loc.get('state'), preferred, allow_remote=True,
+        )
+
         job.opt_field_related = (job.match_score or 0) >= Config.OPT_FIELD_MATCH_MIN
 
         if market == 'IN':
@@ -435,8 +689,6 @@ class JobScraperManager:
             job.wage_level = None
             job.employer_match_conf = None
             job.location_opportunity_score = None
-            job.metro = None
-            job.metro_code = None
             job.in_target_states = True  # do not hide India jobs via US state filter
             job.competition_score = compute_competition_score(
                 {
@@ -468,22 +720,6 @@ class JobScraperManager:
             job.sponsorship_screen, job.opt_field_related,
         )
 
-        loc = canonicalize_location(job.location or '')
-        job.worksite_city = loc.get('city')
-        job.worksite_state = loc.get('state')
-        job.metro = loc.get('metro')
-        job.metro_code = loc.get('metro_code')
-        target_states = getattr(Config, 'TARGET_STATES', [])
-        job.in_target_states = in_target_states(
-            loc.get('state'), target_states, allow_remote=True,
-        )
-        if loc.get('state') in getattr(Config, 'EXCLUDED_STATES', ['CA', 'WA', 'OR']):
-            job.is_hidden = True
-            job.in_target_states = False
-        elif loc.get('parse_ok') and loc.get('state') and not job.in_target_states:
-            if loc.get('state') != 'REMOTE':
-                job.is_hidden = True
-
         opp = lookup_opportunity_score(self.db_session, job.metro_code)
         job.location_opportunity_score = opp
         job.competition_score = compute_competition_score(
@@ -501,15 +737,24 @@ class JobScraperManager:
             job.competition_score,
         )
     
-    def scrape_all(self, sources: List[str] = None, keywords: List[str] = None, locations: List[str] = None) -> Dict:
+    def scrape_all(self, sources: List[str] = None, keywords: List[str] = None,
+                   locations: List[str] = None, trigger: str = 'manual') -> Dict:
         from config.settings import Config
         
         if sources is None:
-            sources = ['github_newgrad', 'adzuna', 'jsearch', 'ats', 'remoteok', 'themuse']
+            sources = list(getattr(Config, 'DAILY_SOURCES', [
+                'github_newgrad', 'adzuna', 'jsearch', 'ats', 'remoteok', 'themuse',
+            ]))
         if keywords is None:
             keywords = Config.SEARCH_KEYWORDS[:5]
         if locations is None:
             locations = Config.TARGET_LOCATIONS
+
+        # NUWorks never participates unless explicitly enabled.
+        if not getattr(Config, 'NUWORKS_ENABLED', False):
+            sources = [s for s in sources if s != 'nuworks']
+
+        self._apply_location_prefs_to_scrapers()
 
         # Fast API / ATS / GitHub feeds first; LinkedIn last (slow + flaky DNS)
         priority = [
@@ -531,6 +776,10 @@ class JobScraperManager:
             'min_match_score': self.min_match_score
         }
 
+        search_run = self._start_search_run(sources, keywords, trigger)
+        if search_run is not None:
+            results['search_run_id'] = search_run.id
+
         sources_done = []
         for source in sources:
             if self.progress_callback:
@@ -548,8 +797,9 @@ class JobScraperManager:
 
             if source == 'nuworks' and source not in self.scrapers:
                 results['sources'][source] = {
-                    'error': 'NUWorks requires credentials. Use the NUWorks login section.',
-                    'jobs_found': 0
+                    'error': 'NUWorks is disabled in this configuration.',
+                    'jobs_found': 0,
+                    'disabled': True,
                 }
                 sources_done.append(source)
                 continue
@@ -583,6 +833,7 @@ class JobScraperManager:
             results['total_new_jobs'] += result.get('new_jobs', 0)
             results['total_matched_jobs'] += result.get('matched_jobs', 0)
             sources_done.append(source)
+            self._record_source_run(search_run, source, result)
 
             if self.progress_callback:
                 try:
@@ -607,9 +858,103 @@ class JobScraperManager:
                     pass
         
         results['completed_at'] = datetime.now(timezone.utc).isoformat()
-        
+        self._finish_search_run(search_run, results)
+
         return results
-    
+
+    def _start_search_run(self, sources, keywords, trigger):
+        """Open a SearchRun row so every run is auditable afterwards."""
+        import json
+
+        try:
+            run = SearchRun(
+                trigger=trigger or 'manual',
+                status='running',
+                sources=json.dumps(list(sources)),
+                keywords=json.dumps(list(keywords or [])),
+            )
+            self.db_session.add(run)
+            self.db_session.commit()
+            return run
+        except Exception:
+            logger.warning('Could not open SearchRun row', exc_info=True)
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+            return None
+
+    def _record_source_run(self, search_run, source, result):
+        try:
+            row = SourceRun(
+                search_run_id=search_run.id if search_run is not None else None,
+                source=source,
+                status='failed' if result.get('errors') or result.get('error') else 'success',
+                jobs_discovered=result.get('total_found', 0),
+                jobs_accepted=result.get('new_jobs', 0),
+                duplicates=result.get('duplicates', 0),
+                missing_apply_url=result.get('missing_apply_url', 0),
+                avg_match=result.get('avg_match'),
+                error_message='; '.join(result.get('errors') or [])[:2000] or None,
+                completed_at=datetime.now(timezone.utc),
+            )
+            self.db_session.add(row)
+            self.db_session.commit()
+        except Exception:
+            logger.warning('Could not record SourceRun for %s', source, exc_info=True)
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+
+    def _finish_search_run(self, search_run, results):
+        if search_run is None:
+            return
+        from config.settings import Config
+
+        try:
+            per_source = results.get('sources') or {}
+            errors = [
+                f'{name}: {"; ".join(data.get("errors") or [])}'
+                for name, data in per_source.items()
+                if data.get('errors') or data.get('error')
+            ]
+            discovered = sum(d.get('total_found', 0) for d in per_source.values())
+            duplicates = sum(d.get('duplicates', 0) for d in per_source.values())
+            averages = [
+                d['avg_match'] for d in per_source.values()
+                if d.get('avg_match') is not None
+            ]
+
+            strong = Job.query.filter(
+                Job.candidate_match_score >= Config.STRONG_MATCH_MIN,
+                Job.scored_at >= search_run.started_at,
+            ).count()
+            excellent = Job.query.filter(
+                Job.candidate_match_score >= Config.EXCELLENT_MATCH_MIN,
+                Job.scored_at >= search_run.started_at,
+            ).count()
+
+            search_run.status = 'completed'
+            search_run.jobs_discovered = discovered
+            search_run.jobs_accepted = results.get('total_new_jobs', 0)
+            search_run.duplicates = duplicates
+            search_run.avg_match = (
+                round(sum(averages) / len(averages), 1) if averages else None
+            )
+            search_run.strong_matches = strong
+            search_run.excellent_matches = excellent
+            search_run.error_count = len(errors)
+            search_run.error_summary = '\n'.join(errors)[:4000] or None
+            search_run.completed_at = datetime.now(timezone.utc)
+            self.db_session.commit()
+        except Exception:
+            logger.warning('Could not finalize SearchRun', exc_info=True)
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+
     def close(self):
         if self.nuworks_scraper:
             self.nuworks_scraper.close()

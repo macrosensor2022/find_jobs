@@ -45,5 +45,6 @@ python-dateutil>=2.8.0
 httpx>=0.25.0
 aiohttp>=3.9.0
 
-# Task Scheduling (optional)
+# Task Scheduling — daily automatic search (falls back to a timer thread)
+apscheduler>=3.10.0
 schedule>=1.2.0

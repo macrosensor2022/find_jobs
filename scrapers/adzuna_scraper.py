@@ -203,8 +203,8 @@ class AdzunaScraper(BaseScraper):
 
         return self.create_job_dict(
             title=title,
-            company=company or 'See posting',
-            location=location or ('India' if market == 'IN' else 'United States'),
+            company=company or 'Unknown',
+            location=location or '',
             description=description,
             job_url=job_url,
             salary_min=salary_min,

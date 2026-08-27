@@ -132,12 +132,12 @@ class JSearchScraper(BaseScraper):
         if not title:
             return None
 
-        company = job_data.get('employer_name') or 'See posting'
+        company = job_data.get('employer_name') or 'Unknown'
         city = job_data.get('job_city') or ''
         state = job_data.get('job_state') or ''
         country = (job_data.get('job_country') or '').upper()
         parts = [p for p in (city, state, country) if p]
-        location = ', '.join(parts) if parts else (country or 'See posting')
+        location = ', '.join(parts) if parts else country
 
         if country in ('IN', 'IND', 'INDIA'):
             market = 'IN'
@@ -151,11 +151,16 @@ class JSearchScraper(BaseScraper):
                                      'chennai', 'mumbai', 'pune', 'delhi')
             ) else 'US'
 
-        job_url = (
-            job_data.get('job_apply_link')
-            or job_data.get('job_google_link')
-            or ''
-        )
+        # A Google search link is not an application page. Keep it so the job
+        # is still discoverable, but label it so it can never be presented as
+        # a verified "Apply Now" destination.
+        apply_link = job_data.get('job_apply_link') or ''
+        if apply_link:
+            job_url, url_status = apply_link, 'unverified'
+        elif job_data.get('job_google_link'):
+            job_url, url_status = job_data['job_google_link'], 'search_fallback'
+        else:
+            job_url, url_status = '', 'unknown'
         description = job_data.get('job_description') or ''
 
         date_posted = None
@@ -184,6 +189,7 @@ class JSearchScraper(BaseScraper):
             salary_min=salary_min,
             salary_max=salary_max,
             date_posted=date_posted,
+            application_url_status=url_status,
             is_remote=bool(job_data.get('job_is_remote'))
                       or 'remote' in location.lower(),
             external_id=f'jsearch-{eid}' if eid else '',

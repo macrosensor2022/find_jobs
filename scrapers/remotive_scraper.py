@@ -99,14 +99,17 @@ class RemotiveScraper(BaseScraper):
 
         return False
 
-    def _parse_date(self, date_str: str) -> datetime:
-        """Parse Remotive ISO date; default to now (UTC) when missing/invalid."""
+    def _parse_date(self, date_str: str):
+        """Parse Remotive's ISO date. Returns None when missing or invalid.
+
+        A missing date must stay unknown rather than becoming "posted today".
+        """
         if not date_str:
-            return datetime.now(timezone.utc)
+            return None
         try:
             return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         except (ValueError, TypeError):
-            return datetime.now(timezone.utc)
+            return None
 
     def parse_job_listing(self, job_data: dict) -> dict:
         """Parse a single Remotive job listing into the shared job dict shape."""

@@ -144,54 +144,79 @@ class BaseScraper(ABC):
             raise
     
     def create_job_dict(self, **kwargs) -> dict:
+        """Build the canonical job dict.
+
+        `date_posted_origin` records how the date was obtained so downstream
+        scoring never treats a guess as a fact:
+          feed            -> the source supplied an explicit timestamp
+          parsed_relative -> derived from text like "3 days ago"
+          unknown         -> no date available (date_posted stays None)
+        """
+        date_posted = kwargs.get('date_posted')
+        origin = kwargs.get('date_posted_origin')
+        if origin is None:
+            origin = 'feed' if date_posted else 'unknown'
+
+        job_url = kwargs.get('job_url', '') or ''
+        application_url = kwargs.get('application_url')
+        if application_url is None:
+            application_url = job_url or None
+
         return {
             'title': kwargs.get('title', ''),
             'company': kwargs.get('company', ''),
             'location': kwargs.get('location', ''),
             'description': kwargs.get('description', ''),
-            'job_url': kwargs.get('job_url', ''),
+            'job_url': job_url,
             'source': self.source_name,
             'salary_min': kwargs.get('salary_min'),
             'salary_max': kwargs.get('salary_max'),
             'job_type': kwargs.get('job_type', 'full-time'),
-            'date_posted': kwargs.get('date_posted'),
+            'date_posted': date_posted,
+            'date_posted_origin': origin,
             'is_remote': kwargs.get('is_remote', False),
             'external_id': kwargs.get('external_id', ''),
             'market': kwargs.get('market'),
             'salary_predicted': kwargs.get('salary_predicted'),
             'description_partial': kwargs.get('description_partial', False),
+            'source_url': kwargs.get('source_url') or job_url or None,
+            'application_url': application_url,
+            'application_url_status': kwargs.get('application_url_status', 'unknown'),
         }
-    
-    def parse_relative_date(self, date_str: str) -> datetime:
+
+    def parse_relative_date(self, date_str: str):
+        """Convert "3 days ago" style text to a datetime, or None.
+
+        Returns None for anything we cannot actually interpret. Guessing a
+        posting date would corrupt every freshness decision downstream.
+        """
         from datetime import timedelta
 
-        date_str = date_str.lower().strip()
+        if not date_str:
+            return None
+        date_str = str(date_str).lower().strip()
         now = datetime.now(timezone.utc)
 
-        if 'just now' in date_str or 'moment' in date_str:
+        if 'just now' in date_str or 'moment' in date_str or 'today' in date_str:
             return now
-        elif 'minute' in date_str:
-            minutes = self._extract_number(date_str)
-            return now - timedelta(minutes=minutes)
-        elif 'hour' in date_str:
-            hours = self._extract_number(date_str)
-            return now - timedelta(hours=hours)
-        elif 'day' in date_str:
-            days = self._extract_number(date_str)
-            return now - timedelta(days=days)
-        elif 'week' in date_str:
-            weeks = self._extract_number(date_str)
-            return now - timedelta(weeks=weeks)
-        elif 'month' in date_str:
-            months = self._extract_number(date_str)
-            return now - timedelta(days=months * 30)
-        elif 'year' in date_str:
-            years = self._extract_number(date_str)
-            return now - timedelta(days=years * 365)
 
-        return now
-    
-    def _extract_number(self, text: str) -> int:
+        units = (
+            ('minute', lambda n: timedelta(minutes=n)),
+            ('hour', lambda n: timedelta(hours=n)),
+            ('day', lambda n: timedelta(days=n)),
+            ('week', lambda n: timedelta(weeks=n)),
+            ('month', lambda n: timedelta(days=n * 30)),
+            ('year', lambda n: timedelta(days=n * 365)),
+        )
+        for unit, delta in units:
+            if unit in date_str:
+                number = self._extract_number(date_str)
+                if number is None:
+                    return None
+                return now - delta(number)
+        return None
+
+    def _extract_number(self, text: str):
         import re
         numbers = re.findall(r'\d+', text)
-        return int(numbers[0]) if numbers else 1
+        return int(numbers[0]) if numbers else None

@@ -48,6 +48,13 @@ class TestGithubSimplify(unittest.TestCase):
         item = dict(SAMPLE, locations=['San Francisco, CA'])
         self.assertIsNone(self.scraper.parse_job_listing(item))
 
+    def test_keeps_west_coast_when_exclusion_cleared(self):
+        self.scraper.excluded_states = []
+        item = dict(SAMPLE, locations=['San Francisco, CA'])
+        job = self.scraper.parse_job_listing(item)
+        self.assertIsNotNone(job)
+        self.assertIn('San Francisco', job['location'])
+
     def test_drops_unrelated_swe(self):
         item = dict(SAMPLE, category='Software', title='iOS Engineer New Grad')
         self.assertIsNone(self.scraper.parse_job_listing(item))

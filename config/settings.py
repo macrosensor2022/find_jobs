@@ -57,6 +57,11 @@ class Config:
         "Dallas, Texas",
         "Austin, Texas",
         "Houston, Texas",
+        "New York, New York",
+        "Philadelphia, Pennsylvania",
+        "Baltimore, Maryland",
+        "Arlington, Virginia",
+        "Washington, DC",
         "Charlotte, North Carolina",
         "Nashville, Tennessee",
         "Columbus, Ohio",
@@ -72,9 +77,10 @@ class Config:
     # Seeking FT new-grad roles — drop co-op / internship titles in match + scrapers
     SEEKING_FULL_TIME_NEW_GRAD = True
 
-    # State allowlist (+ Remote-US). Deliberately EXCLUDES CA / WA / OR.
+    # Legacy alias used by older scrapers. The live ranking path uses
+    # PREFERRED_STATES from user preferences (editable in the UI).
     TARGET_STATES = [
-        'ME', 'TX', 'CT', 'NJ', 'MA', 'TN', 'NC', 'OH', 'MN', 'AZ', 'UT', 'CO',
+        'MA', 'ME', 'CT', 'NJ', 'TX', 'NY', 'PA', 'MD', 'VA', 'DC',
     ]
     EXCLUDED_STATES = ['CA', 'WA', 'OR']
 
@@ -89,23 +95,23 @@ class Config:
 
     # ATS-direct boards (Greenhouse / Lever / Ashby) — sponsor-dense employers
     ATS_BOARDS = [
-        {'platform': 'greenhouse', 'slug': 'toast', 'hint': 'Boston, MA'},
-        {'platform': 'greenhouse', 'slug': 'hubspot', 'hint': 'Cambridge, MA'},
-        {'platform': 'greenhouse', 'slug': 'cloudflare', 'hint': 'Austin, TX'},
-        {'platform': 'greenhouse', 'slug': 'twilio', 'hint': 'Austin, TX'},
-        {'platform': 'greenhouse', 'slug': 'datadog', 'hint': 'New York, NY'},
-        {'platform': 'greenhouse', 'slug': 'stripe', 'hint': 'Remote'},
-        {'platform': 'greenhouse', 'slug': 'shopify', 'hint': 'Remote'},
-        {'platform': 'greenhouse', 'slug': 'airbnb', 'hint': 'Remote'},
-        {'platform': 'greenhouse', 'slug': 'duolingo', 'hint': 'Pittsburgh, PA'},
-        {'platform': 'lever', 'slug': 'netflix', 'hint': 'Remote'},
-        {'platform': 'ashby', 'slug': 'ramp', 'hint': 'New York, NY'},
+        {'platform': 'greenhouse', 'slug': 'toast', 'company': 'Toast', 'hint': 'Boston, MA'},
+        {'platform': 'greenhouse', 'slug': 'hubspot', 'company': 'HubSpot', 'hint': 'Cambridge, MA'},
+        {'platform': 'greenhouse', 'slug': 'cloudflare', 'company': 'Cloudflare', 'hint': 'Austin, TX'},
+        {'platform': 'greenhouse', 'slug': 'twilio', 'company': 'Twilio', 'hint': 'Austin, TX'},
+        {'platform': 'greenhouse', 'slug': 'datadog', 'company': 'Datadog', 'hint': 'New York, NY'},
+        {'platform': 'greenhouse', 'slug': 'stripe', 'company': 'Stripe', 'hint': 'Remote'},
+        {'platform': 'greenhouse', 'slug': 'shopify', 'company': 'Shopify', 'hint': 'Remote'},
+        {'platform': 'greenhouse', 'slug': 'airbnb', 'company': 'Airbnb', 'hint': 'Remote'},
+        {'platform': 'greenhouse', 'slug': 'duolingo', 'company': 'Duolingo', 'hint': 'Pittsburgh, PA'},
+        {'platform': 'lever', 'slug': 'netflix', 'company': 'Netflix', 'hint': 'Remote'},
+        {'platform': 'ashby', 'slug': 'ramp', 'company': 'Ramp', 'hint': 'New York, NY'},
         # Common public boards in target metros (slugs verified via public API)
-        {'platform': 'greenhouse', 'slug': 'fidelity', 'hint': 'Boston, MA'},
-        {'platform': 'greenhouse', 'slug': 'wayfair', 'hint': 'Boston, MA'},
-        {'platform': 'greenhouse', 'slug': 'chewy', 'hint': 'Boston, MA'},
-        {'platform': 'greenhouse', 'slug': 'indeed', 'hint': 'Austin, TX'},
-        {'platform': 'greenhouse', 'slug': 'dropbox', 'hint': 'Remote'},
+        {'platform': 'greenhouse', 'slug': 'fidelity', 'company': 'Fidelity Investments', 'hint': 'Boston, MA'},
+        {'platform': 'greenhouse', 'slug': 'wayfair', 'company': 'Wayfair', 'hint': 'Boston, MA'},
+        {'platform': 'greenhouse', 'slug': 'chewy', 'company': 'Chewy', 'hint': 'Boston, MA'},
+        {'platform': 'greenhouse', 'slug': 'indeed', 'company': 'Indeed', 'hint': 'Austin, TX'},
+        {'platform': 'greenhouse', 'slug': 'dropbox', 'company': 'Dropbox', 'hint': 'Remote'},
     ]
 
     # Legacy location strings for post-filter (prefer TARGET_STATES)
@@ -367,7 +373,7 @@ class Config:
         'clustering': 6,
         'sentiment analysis': 8,
         
-        # Role-level terms — co-op/intern + full-time (still in school till Dec 2027)
+        # Role-level terms — full-time new-grad is the default (MS CS, May 2027)
         'full-time': 10,
         'full time': 10,
         'new grad': 12,
@@ -380,11 +386,11 @@ class Config:
         'engineer i': 8,
         'graduate': 8,
         
-        # Intern/co-op — boosted (currently in MS, graduating Dec 2027)
-        'intern': 12,
-        'internship': 12,
-        'co-op': 15,
-        'coop': 15,
+        # Intern/co-op — demoted; full-time new-grad is the default search.
+        'intern': 2,
+        'internship': 2,
+        'co-op': 2,
+        'coop': 2,
     }
     
     _env_skills = os.getenv('PROFILE_MATCHER_SKILLS')
@@ -443,6 +449,257 @@ class Config:
     # "Apply fast" freshness badge threshold (hours)
     FRESHNESS_FAST_HOURS = int(os.getenv('FRESHNESS_FAST_HOURS', 24))
     
+    # ---- NUWorks: disabled from the normal workflow (code kept, isolated) ------
+    NUWORKS_ENABLED = os.getenv('NUWORKS_ENABLED', 'false').lower() == 'true'
+
+    # ---- Candidate profile (authoritative; seeds the DB on first run) ----------
+    EDUCATION = [
+        {
+            'degree': 'MS',
+            'field': 'Computer Science',
+            'school': 'Northeastern University',
+            'gpa': 4.0,
+            'end_date': '2027-05-01',
+            'is_current': True,
+        },
+        {
+            'degree': 'BS',
+            'field': 'Computer Science Engineering',
+            'school': None,
+            'gpa': None,
+            'end_date': None,
+            'is_current': False,
+        },
+    ]
+
+    # Structured from PROFILE_SUMMARY already stored in this file. Nothing invented.
+    EXPERIENCE = [
+        {
+            'title': 'Data Engineering Co-op',
+            'company': 'Bangor Savings Bank',
+            'location': 'Bangor, ME',
+            'start_date': '2026-07-01',
+            'end_date': '2026-08-31',
+            'employment_type': 'co-op',
+            'description': (
+                'T-SQL audit framework for SQL Server service accounts (Agent, SSISDB, '
+                'credentials, proxies, roles, sessions); extended production data mart '
+                'with DimTags via SQL Server + SSIS; ETL package updates, data-quality '
+                'filters, Git/Azure DevOps production promotions; partnered with Data & '
+                'Analytics / Reporting for BI-facing pipelines.'
+            ),
+            'skills_used': [
+                'SQL Server', 'T-SQL', 'SSIS', 'Azure DevOps', 'ETL', 'Data Modeling',
+            ],
+        },
+        {
+            'title': 'Research Assistant – Conversational Intelligence',
+            'company': 'Steelcase / Roux Working Lab',
+            'location': 'Portland, ME',
+            'start_date': '2026-02-01',
+            'end_date': '2026-05-31',
+            'employment_type': 'research',
+            'description': 'Conversational intelligence research: AI/NLP, embeddings.',
+            'skills_used': ['Python', 'NLP', 'Embeddings', 'Machine Learning'],
+        },
+        {
+            'title': 'Graduate Teaching Assistant – Algorithms',
+            'company': 'Northeastern University',
+            'location': 'Boston, MA',
+            'start_date': '2026-01-01',
+            'end_date': '2026-04-30',
+            'employment_type': 'part-time',
+            'description': 'Graduate teaching assistant for Algorithms.',
+            'skills_used': ['Python'],
+        },
+        {
+            'title': 'Data Science Intern',
+            'company': 'Besant',
+            'location': None,
+            'start_date': None,
+            'end_date': None,
+            'employment_type': 'internship',
+            'description': 'Python, MySQL, Power BI, ETL, Fernet.',
+            'skills_used': ['Python', 'MySQL', 'Power BI', 'ETL'],
+        },
+        {
+            'title': 'Software Developer Intern',
+            'company': 'Bluebase',
+            'location': None,
+            'start_date': None,
+            'end_date': None,
+            'employment_type': 'internship',
+            'description': 'Flask on AWS EC2, Nginx, Linux.',
+            'skills_used': ['Python', 'Flask', 'AWS', 'Linux'],
+        },
+    ]
+
+    # Skills the candidate can actually claim. Category drives dimension scoring.
+    PROFILE_SKILLS = [
+        ('Python', 'language', 5),
+        ('SQL', 'language', 5),
+        ('Java', 'language', 3),
+        ('C', 'language', 2),
+        ('C++', 'language', 2),
+        ('T-SQL', 'language', 4),
+        ('Azure', 'cloud', 5),
+        ('Azure SQL', 'cloud', 4),
+        ('Azure DevOps', 'devops', 4),
+        ('AWS', 'cloud', 3),
+        ('SQL Server', 'database', 5),
+        ('SSIS', 'etl', 5),
+        ('ETL', 'etl', 5),
+        ('ELT', 'etl', 4),
+        ('Data Engineering', 'domain', 5),
+        ('Data Pipelines', 'domain', 5),
+        ('Data Quality', 'domain', 4),
+        ('Data Validation', 'domain', 4),
+        ('Data Warehousing', 'domain', 4),
+        ('Data Modeling', 'domain', 4),
+        ('Spark', 'bigdata', 3),
+        ('Hadoop', 'bigdata', 2),
+        ('Databricks', 'bigdata', 2),
+        ('Power BI', 'bi', 5),
+        ('Machine Learning', 'ml', 3),
+        ('NLP', 'ml', 3),
+        ('Transformers', 'ml', 2),
+        ('BERT', 'ml', 2),
+        ('Embeddings', 'ml', 2),
+        ('TensorFlow', 'ml', 2),
+        ('PyTorch', 'ml', 2),
+        ('Git', 'tooling', 4),
+        ('GitHub', 'tooling', 3),
+        ('Docker', 'devops', 3),
+        ('Cloud Computing', 'cloud', 3),
+        ('DevOps', 'devops', 3),
+    ]
+
+    # ---- Role tiers (semantic classification targets) -------------------------
+    ROLE_TIERS = {
+        1: [
+            'analytics engineer', 'data analyst', 'business intelligence analyst',
+            'bi analyst', 'bi engineer', 'business intelligence engineer',
+            'data quality analyst', 'data governance analyst', 'data integration',
+            'junior data engineer', 'associate data engineer', 'etl developer',
+            'business intelligence developer', 'bi developer', 'reporting analyst',
+        ],
+        2: [
+            'data engineer', 'cloud data engineer', 'azure data engineer',
+            'data platform engineer', 'data operations engineer', 'dataops',
+            'backend data engineer', 'analytics developer', 'data warehouse engineer',
+            'database developer', 'data infrastructure engineer',
+        ],
+        3: [
+            'data scientist', 'ml engineer', 'machine learning engineer',
+            'ai engineer', 'nlp engineer', 'applied scientist',
+            'research engineer', 'decision scientist',
+        ],
+    }
+
+    # Titles that are a poor fit regardless of keyword overlap
+    ROLE_AVOID = [
+        'frontend', 'front-end', 'front end', 'ui developer', 'ui engineer',
+        'react developer', 'angular developer', 'vue developer', 'web designer',
+        'ux designer', 'ux researcher', 'graphic designer', 'ios developer',
+        'android developer', 'mobile developer', 'game developer',
+        'salesforce developer', 'wordpress', 'seo ', 'qa tester',
+        # Pure product/SWE titles that previously leaked in via "engineer" overlap
+        # (Avoid phrases that also appear inside good titles like "Data Platform Engineer")
+        'backend engineer', 'back-end engineer', 'back end engineer',
+        'software engineer', 'full stack', 'fullstack', 'full-stack',
+        'growth engineer', 'devops engineer',
+        'site reliability', 'sre ', 'security engineer',
+        'solutions engineer', 'sales engineer', 'support engineer',
+    ]
+
+    ROLE_TIER_WEIGHT = {1: 100.0, 2: 85.0, 3: 60.0}
+    ROLE_UNKNOWN_SCORE = float(os.getenv('ROLE_UNKNOWN_SCORE', '35'))
+
+    # ---- Candidate match score weights (must sum to 1.0) ----------------------
+    MATCH_WEIGHTS = {
+        'skills': float(os.getenv('W_SKILLS', '0.30')),
+        'responsibilities': float(os.getenv('W_RESPONSIBILITIES', '0.25')),
+        'experience': float(os.getenv('W_EXPERIENCE', '0.15')),
+        'education': float(os.getenv('W_EDUCATION', '0.10')),
+        'role': float(os.getenv('W_ROLE', '0.10')),
+        'location': float(os.getenv('W_LOCATION', '0.05')),
+        'authorization': float(os.getenv('W_AUTHORIZATION', '0.05')),
+    }
+
+    # FINAL = CANDIDATE_MATCH_WEIGHT * match + OPPORTUNITY_WEIGHT * opportunity
+    CANDIDATE_MATCH_WEIGHT = float(os.getenv('CANDIDATE_MATCH_WEIGHT', '0.70'))
+    OPPORTUNITY_WEIGHT = float(os.getenv('OPPORTUNITY_WEIGHT', '0.30'))
+
+    # Opportunity sub-weights (normalized internally)
+    OPPORTUNITY_WEIGHTS = {
+        'freshness': 0.25,
+        'sponsorship': 0.20,
+        'role_priority': 0.15,
+        'company_preference': 0.10,
+        'location': 0.10,
+        'accessibility': 0.10,
+        'experience_difficulty': 0.10,
+    }
+
+    # ---- Location preferences (editable from the UI; these are seed defaults) --
+    PREFERRED_STATES = ['MA', 'ME', 'CT', 'NJ', 'TX', 'NY', 'PA', 'MD', 'VA', 'DC']
+    ACCEPTABLE_STATES = ['NH', 'RI', 'VT', 'DE', 'NC', 'OH', 'TN', 'MN', 'AZ', 'UT', 'CO', 'IL', 'GA']
+    ALLOW_REMOTE_US = os.getenv('ALLOW_REMOTE_US', 'true').lower() == 'true'
+    ALLOW_HYBRID = os.getenv('ALLOW_HYBRID', 'true').lower() == 'true'
+    ALLOW_RELOCATION = os.getenv('ALLOW_RELOCATION', 'true').lower() == 'true'
+
+    # ---- Freshness / expiry ---------------------------------------------------
+    FRESHNESS_BUCKETS = [
+        (24, 'hot'),        # <24h
+        (72, 'fresh'),      # 1-3 days
+        (168, 'recent'),    # 4-7 days
+        (336, 'aging'),     # 8-14 days
+        (None, 'stale'),    # >14 days
+    ]
+    JOB_EXPIRY_DAYS = int(os.getenv('JOB_EXPIRY_DAYS', '30'))
+    VERIFY_STALE_AFTER_HOURS = int(os.getenv('VERIFY_STALE_AFTER_HOURS', '48'))
+    VERIFY_TOP_N = int(os.getenv('VERIFY_TOP_N', '15'))
+
+    # ---- Daily briefing ------------------------------------------------------
+    DAILY_TOP_N = int(os.getenv('DAILY_TOP_N', '10'))
+    # Today briefing: only Tier 1–2 by default (set 3 to include ML/AI stretch)
+    BRIEFING_MAX_ROLE_TIER = int(os.getenv('BRIEFING_MAX_ROLE_TIER', '2'))
+    STRONG_MATCH_MIN = int(os.getenv('STRONG_MATCH_MIN', '75'))
+    EXCELLENT_MATCH_MIN = int(os.getenv('EXCELLENT_MATCH_MIN', '90'))
+
+    # ---- Scheduler -----------------------------------------------------------
+    SCHEDULE_ENABLED = os.getenv('SCHEDULE_ENABLED', 'true').lower() == 'true'
+    SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', '7'))
+    SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', '0'))
+    SCHEDULE_TIMEZONE = os.getenv('SCHEDULE_TIMEZONE', 'America/New_York')
+
+    # Sources used by the scheduled daily run (NUWorks + LinkedIn excluded)
+    DAILY_SOURCES = [
+        'github_newgrad', 'ats', 'adzuna', 'jsearch',
+        'remoteok', 'themuse', 'remotive', 'arbeitnow',
+    ]
+
+    # ---- Follow-ups ---------------------------------------------------------
+    FOLLOWUP_DAYS = [int(d) for d in os.getenv('FOLLOWUP_DAYS', '7,14').split(',') if d.strip()]
+
+    # ---- Company watchlist seed (evidence-based data filled in at runtime) ----
+    WATCHLIST_COMPANIES = [
+        'Capital One', 'Fidelity', 'Liberty Mutual', 'Optum',
+        'JPMorgan Chase', 'Bank of America', 'Wells Fargo',
+        'Amazon', 'Microsoft', 'Google', 'Deloitte', 'Accenture',
+        'IBM', 'Oracle', 'Datadog', 'Snowflake', 'Databricks', 'Nationwide',
+    ]
+
+    # ---- External search launcher (NOT integrated sources) -------------------
+    EXTERNAL_SEARCH_SITES = [
+        {'name': 'LinkedIn', 'url': 'https://www.linkedin.com/jobs/search/?keywords={q}&location={loc}&f_TPR=r86400'},
+        {'name': 'Indeed', 'url': 'https://www.indeed.com/jobs?q={q}&l={loc}&fromage=1'},
+        {'name': 'Dice', 'url': 'https://www.dice.com/jobs?q={q}&location={loc}'},
+        {'name': 'Built In', 'url': 'https://builtin.com/jobs?search={q}'},
+        {'name': 'Wellfound', 'url': 'https://wellfound.com/jobs?query={q}'},
+        {'name': 'Simplify', 'url': 'https://simplify.jobs/jobs?query={q}'},
+    ]
+
     # Regex patterns to detect citizenship / clearance / no-sponsorship language.
     # Applied to title + description to set sponsorship_screen flag.
     SPONSORSHIP_SCREEN_PATTERNS = [
@@ -461,3 +718,160 @@ class Config:
         r'must\s+be\s+authorized\s+to\s+work.*without.*sponsor',
         r'permanent\s+resident\s+or\s+citizen',
     ]
+
+    # ---- Work-authorization classification -----------------------------------
+    # Each entry: (pattern, reason). A match sets status RED and stores the
+    # matched sentence as evidence. Never inferred from the employer name.
+    AUTH_BLOCKING_PATTERNS = [
+        (r'must be a u\.?s\.? citizen', 'US citizenship required'),
+        (r'u\.?s\.? citizen(?:s|ship)?\s+(?:only|is required|required)', 'US citizenship required'),
+        (r'united states citizen(?:s|ship)?\s+(?:only|required)', 'US citizenship required'),
+        (r'(?:active\s+)?security clearance\s+(?:is\s+)?required', 'Security clearance required'),
+        (r'active\s+(?:ts|top secret|secret)\s+clearance', 'Security clearance required'),
+        (r'(?:ts|top secret)\s*[/\\]\s*(?:sci|ssbi)', 'Security clearance required'),
+        (r'ability to obtain (?:a )?security clearance', 'Security clearance required'),
+        (r'(?:we (?:are )?(?:do|will) not|cannot|unable to)\s+(?:be able to\s+)?sponsor', 'Employer states it will not sponsor'),
+        (r'\b(?:do|does|will|can|could)\s*(?:not|n\'t)\s+sponsor\b', 'Employer states it will not sponsor'),
+        (r'\b(?:do|does|will|can|could)\s*(?:not|n\'t)\s+(?:be able to\s+)?'
+         r'(?:provide|offer|support|pursue|file|apply for)\b[^.]{0,80}?'
+         r'(?:sponsorship|visa|immigration)', 'Employer states it will not sponsor'),
+        (r'\b(?:is|are)\s+not\s+(?:currently\s+)?(?:providing|offering|sponsoring)'
+         r'\b[^.]{0,60}(?:sponsorship|visa|immigration)', 'Employer states it will not sponsor'),
+        (r'\b(?:unable|not able|not willing|unwilling)\s+to\s+'
+         r'(?:sponsor|provide sponsorship|offer sponsorship)', 'Employer states it will not sponsor'),
+        (r'(?:visa\s+|immigration[\s-]related\s+)?sponsorship\s+(?:is\s+|will\s+)?'
+         r'not\s+(?:be\s+)?(?:available|offered|provided|possible|supported)',
+         'No sponsorship available'),
+        (r'no\s+(?:visa\s+|immigration\s+)?sponsorship\s+(?:is\s+)?'
+         r'(?:available|provided|offered)', 'No sponsorship available'),
+        (r'\bnot\s+eligible\s+for\b[^.]{0,50}(?:sponsorship|visa)',
+         'Role stated as not eligible for sponsorship'),
+        # In posting language "no sponsorship required/needed" is addressed at the
+        # candidate: you must already be authorized without employer sponsorship.
+        (r'\bno\s+(?:visa\s+)?sponsorship\s+(?:is\s+)?(?:required|needed)',
+         'Requires authorization without sponsorship'),
+        (r'\bno\s+(?:visa\s+)?sponsorship\b', 'No sponsorship available'),
+        (r'\bwithout\s+sponsorship\b', 'Requires authorization without sponsorship'),
+        (r'without\s+(?:the need for\s+)?(?:current or future\s+)?(?:visa\s+)?sponsorship', 'Requires authorization without sponsorship'),
+        (r'do(?:es)? not (?:now or in the future )?require sponsorship', 'Requires authorization without sponsorship'),
+        (r'(?:must|do|does|will|can)\s?not\s+(?:now or in the future\s+)?require\b[^.]{0,60}sponsorship', 'Requires authorization without sponsorship'),
+        (r'not require sponsorship (?:now or in the future|to work)', 'Requires authorization without sponsorship'),
+        (r'permanent resident(?:s)?\s+(?:or|and)\s+citizen(?:s)?\s+only', 'Citizen/PR only'),
+        (r'green card holder(?:s)?\s+(?:or|and)\s+(?:u\.?s\.? )?citizen(?:s)?\s+only', 'Citizen/PR only'),
+        (r'itar', 'ITAR / export-control restriction'),
+        (r'(?:must be a )?(?:u\.?s\.? )?person(?:s)? as defined by (?:itar|export)', 'ITAR / export-control restriction'),
+    ]
+
+    # A match sets status GREEN with the matched sentence as evidence.
+    AUTH_FRIENDLY_PATTERNS = [
+        (r'(?:will|can|do)\s+sponsor', 'Employer states it sponsors'),
+        (r'(?:visa|h-?1b|h1-?b)\s+sponsorship\s+(?:is\s+)?(?:available|offered|provided)', 'Sponsorship available'),
+        (r'sponsor(?:ship)?\s+(?:for\s+)?(?:eligible\s+)?(?:candidates|applicants|employees)', 'Sponsorship offered'),
+        (r'open to (?:candidates on\s+)?(?:f-?1|opt|stem opt|cpt)', 'Open to OPT/F-1'),
+        (r'(?:e-?verify|e verify)\s+(?:employer|participant)', 'E-Verify employer (supports STEM OPT)'),
+        (r'we\s+(?:provide|offer)\s+(?:visa\s+)?sponsorship', 'Sponsorship offered'),
+        (r'cap[\s-]?exempt', 'H-1B cap-exempt employer'),
+    ]
+
+    # Phrases that indicate authorization is discussed but the outcome is unclear.
+    AUTH_UNCLEAR_PATTERNS = [
+        (r'must be (?:legally )?authorized to work', 'Requires work authorization; sponsorship not addressed'),
+        (r'work authorization', 'Work authorization mentioned without detail'),
+        (r'sponsorship', 'Sponsorship mentioned without a clear position'),
+        (r'visa status', 'Visa status mentioned without detail'),
+    ]
+
+    # ---- Responsibility taxonomy (drives the responsibilities dimension) ------
+    # Each bucket maps to phrases found in job descriptions that the candidate
+    # can demonstrably do. Coverage of these buckets = responsibilities score.
+    RESPONSIBILITY_BUCKETS = {
+        'pipeline_build': [
+            'build data pipeline', 'develop data pipeline', 'etl pipeline',
+            'elt pipeline', 'data ingestion', 'batch processing', 'ingest data',
+            'build etl', 'develop etl', 'data integration',
+        ],
+        'sql_development': [
+            'write sql', 'complex sql', 'stored procedure', 'query optimization',
+            'sql queries', 'tune queries', 't-sql', 'database queries',
+        ],
+        'warehouse_modeling': [
+            'data warehouse', 'dimensional model', 'star schema', 'data model',
+            'data mart', 'schema design', 'snowflake schema',
+        ],
+        'data_quality': [
+            'data quality', 'data validation', 'data accuracy', 'reconciliation',
+            'data integrity', 'unit test', 'data governance', 'data lineage',
+        ],
+        'reporting_bi': [
+            'dashboard', 'power bi', 'tableau', 'reporting', 'visualization',
+            'kpi', 'self-service analytics', 'looker',
+        ],
+        'analysis': [
+            'ad hoc analysis', 'analyze data', 'insights', 'trend analysis',
+            'root cause', 'business requirements', 'stakeholder',
+        ],
+        'cloud_platform': [
+            'azure', 'aws', 'gcp', 'cloud platform', 'data factory',
+            'synapse', 'databricks', 'snowflake', 's3', 'redshift',
+        ],
+        'automation_devops': [
+            'automate', 'ci/cd', 'version control', 'git', 'docker',
+            'orchestration', 'airflow', 'scheduling', 'monitoring',
+        ],
+        'ml_modeling': [
+            'machine learning model', 'train model', 'feature engineering',
+            'nlp', 'predictive model', 'deploy model',
+        ],
+        'documentation': [
+            'document', 'documentation', 'runbook', 'best practices',
+            'code review', 'collaborate with',
+        ],
+    }
+
+    # How strongly the candidate can demonstrate each responsibility bucket
+    # (0.0-1.0). Derived from real experience/projects, editable in settings.
+    RESPONSIBILITY_COVERAGE = {
+        'pipeline_build': 1.0,
+        'sql_development': 1.0,
+        'warehouse_modeling': 0.9,
+        'data_quality': 1.0,
+        'reporting_bi': 0.9,
+        'analysis': 0.8,
+        'cloud_platform': 0.85,
+        'automation_devops': 0.7,
+        'ml_modeling': 0.6,
+        'documentation': 0.9,
+    }
+
+    # Candidate's highest completed/in-progress degree level
+    CANDIDATE_DEGREE_LEVEL = os.getenv('CANDIDATE_DEGREE_LEVEL', 'masters')
+
+    # Education requirement detection
+    EDUCATION_PATTERNS = {
+        'phd': [r'\bph\.?d\b', r'\bdoctorate\b'],
+        'masters': [r"\bmaster'?s?\b", r'\bm\.?s\.?\b(?!\s*office)', r'\bmba\b', r'\bgraduate degree\b'],
+        'bachelors': [r"\bbachelor'?s?\b", r'\bb\.?s\.?\b', r'\bb\.?a\.?\b', r'\bundergraduate degree\b'],
+        'associates': [r"\bassociate'?s degree\b"],
+    }
+
+    # ---- Job quality thresholds ---------------------------------------------
+    # Sources ranked by trustworthiness of the data they return.
+    SOURCE_TRUST = {
+        'greenhouse': 1.0, 'lever': 1.0, 'ashby': 1.0, 'smartrecruiters': 1.0,
+        'ats': 1.0, 'workday': 0.95,
+        'github_newgrad': 0.9, 'github_intern': 0.9,
+        'themuse': 0.8, 'remotive': 0.75, 'remoteok': 0.75, 'arbeitnow': 0.7,
+        'adzuna': 0.65, 'jsearch': 0.6,
+        'linkedin': 0.5, 'nuworks': 0.5,
+    }
+    MIN_QUALITY_FOR_RANKING = float(os.getenv('MIN_QUALITY_FOR_RANKING', '40'))
+
+    # Below this many characters a description cannot be assessed, so the
+    # text-dependent match dimensions are scored as unknown rather than clean.
+    MIN_DESCRIPTION_CHARS = int(os.getenv('MIN_DESCRIPTION_CHARS', '200'))
+
+    # A location dimension at or below this score (non-US, excluded state) makes
+    # a job unrealistic to apply to, no matter how well the skills line up.
+    LOCATION_BLOCK_MAX = float(os.getenv('LOCATION_BLOCK_MAX', '20'))
+    # A role dimension below this means the title is not one of my target roles.
+    ROLE_BLOCK_MIN = float(os.getenv('ROLE_BLOCK_MIN', '40'))

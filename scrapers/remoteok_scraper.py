@@ -136,10 +136,17 @@ class RemoteOKScraper(BaseScraper):
 
         title = job_data.get('position') or job_data.get('title', '')
         company = job_data.get('company', '')
-        location = job_data.get('location', 'Remote')
+        location = job_data.get('location') or ''
 
-        slug = job_data.get('slug', '')
-        job_url = f"https://remoteok.com/remote-jobs/{slug}" if slug else job_data.get('url', '')
+        # Prefer the URL the API gives us. The slug permalink is only a
+        # fallback, and it is flagged as unverified so the UI can say so.
+        job_url = job_data.get('url') or ''
+        url_status = 'unverified' if job_url else 'unknown'
+        if not job_url:
+            slug = job_data.get('slug', '')
+            if slug:
+                job_url = f"https://remoteok.com/remote-jobs/{slug}"
+                url_status = 'unverified'
 
         date_posted = None
         if job_data.get('date'):
@@ -147,7 +154,7 @@ class RemoteOKScraper(BaseScraper):
                 date_str = job_data['date']
                 date_posted = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
             except (ValueError, TypeError):
-                date_posted = datetime.now(timezone.utc)
+                date_posted = None
 
         description = job_data.get('description', '')
 
@@ -170,6 +177,7 @@ class RemoteOKScraper(BaseScraper):
             salary_min=salary_min,
             salary_max=salary_max,
             date_posted=date_posted,
+            application_url_status=url_status,
             is_remote=True,
             external_id=str(job_data.get('id', ''))
         )

@@ -167,7 +167,7 @@ class TheMuseScraper(BaseScraper):
             try:
                 date_posted = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
             except (ValueError, TypeError):
-                date_posted = datetime.now(timezone.utc)
+                date_posted = None
 
         is_remote = 'remote' in location_str.lower() or 'flexible' in location_str.lower()
 
@@ -189,7 +189,7 @@ class TheMuseScraper(BaseScraper):
         return self.create_job_dict(
             title=title,
             company=company,
-            location=location_str or 'See posting',
+            location=location_str or '',
             description=description,
             job_url=job_url,
             date_posted=date_posted,

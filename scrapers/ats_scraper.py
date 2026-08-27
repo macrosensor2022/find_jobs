@@ -14,16 +14,34 @@ from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-DE_KEYWORDS = (
-    'data engineer', 'analytics engineer', 'bi engineer', 'etl', 'ssis',
-    'sql server', 'data analyst', 'business intelligence', 'power bi',
-    'azure data', 'warehouse', 'pipeline',
-)
-
-
 def _title_relevant(title: str) -> bool:
-    t = (title or '').lower()
-    return any(k in t for k in DE_KEYWORDS)
+    """Keep titles the role classifier can place in a target tier.
+
+    Using the classifier instead of a short keyword list means a real role
+    like "Data Quality Analyst" is no longer silently discarded.
+    """
+    from services.role_classifier import classify_role
+
+    role = classify_role(title or '')
+    if role['avoid']:
+        return False
+    if role['tier'] is not None:
+        return True
+    return role['family'] == 'data_adjacent'
+
+
+def _company_name(slug: str) -> str:
+    """Resolve the employer's display name for a board slug.
+
+    The slug identifies the real employer, so this is a normalization, not an
+    invention. Configured display names win over the de-slugified form.
+    """
+    from config.settings import Config
+
+    for board in getattr(Config, 'ATS_BOARDS', []) or []:
+        if board.get('slug') == slug and board.get('company'):
+            return board['company']
+    return (slug or '').replace('-', ' ').title()
 
 
 class GreenhouseScraper(BaseScraper):
@@ -72,14 +90,19 @@ class GreenhouseScraper(BaseScraper):
                     )
                 except (ValueError, TypeError):
                     posted = None
+            url = item.get('absolute_url') or ''
             jobs.append({
                 'title': title,
-                'company': slug.replace('-', ' ').title(),
-                'location': loc or 'Remote',
+                'company': _company_name(slug),
+                'location': loc,
                 'description': item.get('content') or '',
-                'job_url': item.get('absolute_url') or '',
+                'job_url': url,
+                'source_url': url,
+                'application_url': url or None,
+                'application_url_status': 'unverified' if url else 'unknown',
                 'external_id': f"gh-{slug}-{item.get('id')}",
                 'date_posted': posted,
+                'date_posted_origin': 'feed' if posted else 'unknown',
                 'is_remote': 'remote' in (loc or '').lower(),
                 'job_type': 'full-time',
                 'source': 'greenhouse',
@@ -134,14 +157,19 @@ class LeverScraper(BaseScraper):
                     posted = datetime.fromtimestamp(ts, tz=timezone.utc)
                 except (ValueError, TypeError, OSError):
                     posted = None
+            url = item.get('hostedUrl') or item.get('applyUrl') or ''
             jobs.append({
                 'title': title,
-                'company': slug.replace('-', ' ').title(),
-                'location': loc or 'Remote',
+                'company': _company_name(slug),
+                'location': loc,
                 'description': item.get('descriptionPlain') or item.get('description') or '',
-                'job_url': item.get('hostedUrl') or item.get('applyUrl') or '',
+                'job_url': url,
+                'source_url': url,
+                'application_url': item.get('applyUrl') or url or None,
+                'application_url_status': 'unverified' if url else 'unknown',
                 'external_id': f"lever-{slug}-{item.get('id')}",
                 'date_posted': posted,
+                'date_posted_origin': 'feed' if posted else 'unknown',
                 'is_remote': 'remote' in (loc or '').lower(),
                 'job_type': 'full-time',
                 'source': 'lever',
@@ -197,14 +225,19 @@ class AshbyScraper(BaseScraper):
                     )
                 except (ValueError, TypeError):
                     posted = None
+            url = item.get('jobUrl') or item.get('applyUrl') or ''
             jobs.append({
                 'title': title,
-                'company': slug.replace('-', ' ').title(),
-                'location': loc or 'Remote',
+                'company': _company_name(slug),
+                'location': loc,
                 'description': item.get('descriptionPlain') or item.get('descriptionHtml') or '',
-                'job_url': item.get('jobUrl') or item.get('applyUrl') or '',
+                'job_url': url,
+                'source_url': url,
+                'application_url': item.get('applyUrl') or url or None,
+                'application_url_status': 'unverified' if url else 'unknown',
                 'external_id': f"ashby-{slug}-{item.get('id')}",
                 'date_posted': posted,
+                'date_posted_origin': 'feed' if posted else 'unknown',
                 'is_remote': bool(item.get('isRemote')) or 'remote' in (loc or '').lower(),
                 'job_type': 'full-time',
                 'source': 'ashby',
