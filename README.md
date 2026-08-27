@@ -34,7 +34,20 @@ Built with Flask + a responsive frontend. Repo: [macrosensor2022/find_jobs](http
 - Filter by match, sponsorship, location, source, verified apply URL, favorites, applied
 - Applications tracker + follow-up reminders
 - Company watchlist + outcome insights
-- Freshness buckets (hot → stale)
+- Freshness buckets (HOT → FRESH → RECENT → AGING → OLD → STALE)
+
+### Command-center intelligence
+- **Application priority & recommendation** — every job scores `APPLY NOW` / `APPLY` / `WATCH` / `SKIP` with an explainable priority score
+- **Application readiness** (capped ≤ 94) and **effort estimate** (banded: `5-10 min` … `40+ min`)
+- **Role-family taxonomy** — 7 families (incl. `DATA_AUTOMATION` / `CLOUD_DATA` / `AI_DATA`) with hidden-fit detection
+- **Skill-gap matrix** — per-requirement `MATCHED` / `PARTIAL` / `MISSING` against your profile
+- **Competition signal** from legitimate source data (never invented)
+- **Insights** — employer radar, market skills, search health
+
+### F-1 / OPT realism
+- New-grad feed hard-drops unwinnable roles: PhD-gated, security-clearance, US-citizenship-only, and defense/intelligence contractor listings
+- Evidence-backed sponsorship status; E-Verify / LCA when loaded locally
+- "Apply Now" only after the stored application URL is live-verified
 
 ## Tech Stack
 
@@ -103,22 +116,30 @@ NUWORKS_PASSWORD=
 ## Testing
 
 ```bash
-# Unit tests (no server required)
-python -m unittest tests.test_github_simplify tests.test_experience_filter tests.test_adzuna_jsearch tests.test_location_metro -v
+# Full suite (plain unittest, no custom harness needed)
+python3 -m unittest discover -s tests -q
 
-# End-to-end API tests (server must be running)
-python run.py   # other terminal
-python -m tests.test_platform
+# Single module
+python3 -m unittest tests.test_github_simplify -v
+
+# JS syntax check after frontend edits
+node --check frontend/static/js/app.js
+
+# Re-score every stored job after changing weights/skills/sponsorship
+python3 scripts/rescore_all.py
 ```
 
 ## Recent Updates
 
+- **Command-center scoring**: application priority + recommendation, readiness (≤94), effort (banded), role-family taxonomy, skill-gap matrix, hidden-fit detection, competition signal
+- **Analytics & health endpoints**: `/api/analytics/employer-radar`, `/api/analytics/market-skills`, `/api/search/health`, `/api/jobs/<id>/why-hidden`
+- **Freshness buckets**: `HOT → FRESH → RECENT → AGING → OLD → STALE`
+- **F-1/OPT realism**: new-grad feed drops PhD / clearance / citizenship / defense-gated roles
 - Full-time **new-grad** focus (co-op/intern hard-dropped)
 - SimplifyJobs GitHub feeds (new-grad + optional intern lists)
 - Async scrape + status polling; SSL hardenings for Windows
 - Adzuna + JSearch budgeted APIs; ATS board fan-out
 - Metro opportunity / LCA enrichment; experience gate
-- Experience + GitHub scraper unit tests
 
 ## Project Structure
 
