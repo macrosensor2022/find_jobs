@@ -131,6 +131,18 @@ class Job(db.Model):
     seniority_level = db.Column(db.String(24), nullable=True)
     remote_type = db.Column(db.String(12), nullable=True)  # remote|hybrid|onsite|unknown
 
+    # ---- V3 — Industry intelligence -----------------------------------------
+    industry = db.Column(db.String(64), nullable=True)
+    industry_label = db.Column(db.String(128), nullable=True)
+    under_the_radar = db.Column(db.Boolean, default=False)
+    industry_opportunity = db.Column(db.String(16), nullable=True)  # HIGH|MEDIUM|LOW|UNKNOWN
+    industry_opportunity_score = db.Column(db.Float, nullable=True)
+    industry_evidence = db.Column(db.Text, nullable=True)  # JSON list of evidence strings
+    # ---- V3 — Golden opportunity (sibling to final_score, never overriding) ---
+    golden_opportunity_score = db.Column(db.Float, nullable=True)
+    # ---- V3 — Contact intelligence (best recommended contact snapshot) ------
+    recommended_contact_json = db.Column(db.Text, nullable=True)  # JSON dict
+
     # ---- Completion (all explainable; breakdown stored as JSON) -------------
     candidate_match_score = db.Column(db.Integer, nullable=True)
     opportunity_score = db.Column(db.Integer, nullable=True)
@@ -293,6 +305,17 @@ class Job(db.Model):
                 self.application_recommendation or 'watch'
             ),
             'application_readiness': self.application_readiness_score,
+            # V3 — Industry intelligence
+            'industry': self.industry,
+            'industry_label': self.industry_label,
+            'under_the_radar': bool(self.under_the_radar),
+            'industry_opportunity': self.industry_opportunity or 'UNKNOWN',
+            'industry_opportunity_score': self.industry_opportunity_score,
+            'industry_evidence': _load_json(self.industry_evidence, []),
+            # V3 — Golden opportunity
+            'golden_opportunity_score': self.golden_opportunity_score,
+            # V3 — Contact intelligence
+            'recommended_contact': _load_json(self.recommended_contact_json, None),
         })
         return data
 
@@ -716,6 +739,95 @@ class ApplicationEvent(db.Model):
             'event_type': self.event_type, 'from_status': self.from_status,
             'to_status': self.to_status, 'detail': self.detail,
             'occurred_at': self.occurred_at.isoformat() if self.occurred_at else None,
+        }
+
+
+class Contact(db.Model):
+    """A discovered professional contact for outreach (V3).
+
+    Only legitimately public professional information is stored. Nothing here is
+    ever fabricated: if a field is unknown it is left null and surfaced as
+    UNKNOWN downstream. Each contact carries an evidence source URL and a
+    confidence rather than an assumption.
+    """
+    __tablename__ = 'contact'
+    __table_args__ = (
+        db.Index('idx_contact_job', 'job_id'),
+        db.Index('idx_contact_company', 'company'),
+        db.Index('idx_contact_contacted', 'contact_status'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.Integer, db.ForeignKey('jobs.id'), nullable=False)
+    company = db.Column(db.String(255))
+
+    # ---- Identity (evidence-backed; never guessed) ---------------------
+    contact_type = db.Column(db.String(32))      # hiring_manager | technical_recruiter | ...
+    contact_name = db.Column(db.String(255), nullable=True)
+    contact_role = db.Column(db.String(255), nullable=True)   # "Engineering Manager"
+    source = db.Column(db.String(100))           # e.g. 'company_team_page'
+    source_url = db.Column(db.String(500), nullable=True)
+    discovered_at = db.Column(db.DateTime, default=_utcnow)
+    confidence = db.Column(db.String(16), default='UNKNOWN')  # HIGH|MEDIUM|LOW|UNKNOWN
+    evidence = db.Column(db.Text)                # JSON list of evidence strings
+
+    # ---- Professional contact channel (public evidence only) -------------
+    email = db.Column(db.String(255), nullable=True)
+    email_state = db.Column(db.String(24), default='NOT_FOUND')  # VERIFIED_PUBLIC|PUBLIC_UNVERIFIED|PATTERN_INFERRED|NOT_FOUND|UNKNOWN
+    email_source = db.Column(db.String(255), nullable=True)
+    email_verified = db.Column(db.Boolean, default=False)
+    email_discovered_at = db.Column(db.DateTime, nullable=True)
+    linkedin_url = db.Column(db.String(500), nullable=True)
+
+    # ---- Relevance + recommended type --------------------------------------
+    contact_relevance_score = db.Column(db.Float, nullable=True)
+    is_recommended = db.Column(db.Boolean, default=False)
+
+    # ---- Outreach / contacted tracking (manual only; never auto-sends) -----
+    contact_status = db.Column(db.String(20), default='NOT_CONTACTED')
+    # NOT_CONTACTED | DRAFT_READY | CONTACTED | REPLIED | NO_RESPONSE |
+    # FOLLOW_UP | NOT_RELEVANT
+    contacted_at = db.Column(db.DateTime, nullable=True)
+    contact_method = db.Column(db.String(16), nullable=True)  # EMAIL | LINKEDIN | FORM | OTHER
+    message_draft = db.Column(db.Text, nullable=True)
+    response_status = db.Column(db.String(24), nullable=True)
+    follow_up_date = db.Column(db.DateTime, nullable=True)
+    follow_up_count = db.Column(db.Integer, default=0)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
+
+    job = db.relationship('Job', backref=db.backref('contacts', lazy='select'))
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'job_id': self.job_id, 'company': self.company,
+            'contact_type': self.contact_type, 'contact_name': self.contact_name,
+            'contact_role': self.contact_role, 'source': self.source,
+            'source_url': self.source_url, 'confidence': self.confidence or 'UNKNOWN',
+            'evidence': _load_json(self.evidence, []),
+            'email': self.email, 'email_state': self.email_state or 'NOT_FOUND',
+            'email_source': self.email_source,
+            'email_verified': bool(self.email_verified),
+            'email_discovered_at': (
+                self.email_discovered_at.isoformat() if self.email_discovered_at else None
+            ),
+            'linkedin_url': self.linkedin_url,
+            'contact_relevance_score': self.contact_relevance_score,
+            'is_recommended': bool(self.is_recommended),
+            'contact_status': self.contact_status or 'NOT_CONTACTED',
+            'contacted_at': self.contacted_at.isoformat() if self.contacted_at else None,
+            'contact_method': self.contact_method,
+            'message_draft': self.message_draft,
+            'response_status': self.response_status,
+            'follow_up_date': (
+                self.follow_up_date.isoformat() if self.follow_up_date else None
+            ),
+            'follow_up_count': self.follow_up_count or 0,
+            'notes': self.notes,
+            'discovered_at': self.discovered_at.isoformat() if self.discovered_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

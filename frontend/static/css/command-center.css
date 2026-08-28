@@ -688,3 +688,65 @@
     border-color: var(--primary);
     color: var(--text-primary);
 }
+
+/* =============================================================================
+   V3 — Industry Radar + Under-the-radar + Contacts + Outreach
+   ============================================================================= */
+
+.pill-violet { background: rgba(139, 92, 246, 0.18); color: #c4b5fd; }
+.pill-good   { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+.v3-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.v3-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm, 10px);
+    padding: 14px 16px;
+}
+.v3-card h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+.v3-note { color: var(--text-muted); font-size: 0.78rem; margin: 0 0 10px; }
+
+.v3-chips { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.v3-chips .chip {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border-color);
+    background: var(--bg-tertiary); cursor: default;
+}
+.v3-chips .chip strong { font-size: 0.82rem; color: var(--text-primary); }
+.v3-chips .chip span  { font-size: 0.72rem; color: var(--text-muted); }
+.v3-chips .chip.high   { border-color: rgba(16,185,129,.4); }
+.v3-chips .chip.medium { border-color: rgba(245,158,11,.4); }
+.v3-chips .chip.low    { border-color: rgba(239,68,68,.35); }
+.v3-chips .chip.unknown{ border-color: var(--border-color); }
+
+.v3-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.v3-list li { cursor: pointer; padding: 6px 8px; border-radius: 8px; }
+.v3-list li:hover { background: var(--bg-tertiary); }
+.v3-list .v3-role, .v3-list .v3-name { display: block; font-size: 0.85rem; color: var(--text-primary); font-weight: 600; }
+.v3-list .v3-company, .v3-list .v3-meta, .v3-list .v3-email { display: block; font-size: 0.75rem; color: var(--text-muted); }
+.v3-list .v3-role { font-size: 0.8rem; font-weight: 500; color: var(--text-secondary); }
+
+.v3-job, .v3-contact { display: flex; flex-direction: column; gap: 2px; }
+
+.detail-v3 {
+    background: var(--bg-tertiary);
+    padding: 16px;
+    border-radius: var(--border-radius-sm);
+}
+.detail-v3 h4 { margin-bottom: 10px; }
+.detail-v3 .v3-contact-block { display: flex; flex-direction: column; gap: 8px; }
+.detail-v3 .v3contact { border-left: 3px solid rgba(139,92,246,.5); padding-left: 10px; }
+.detail-v3 p { color: var(--text-secondary); line-height: 1.5; margin: 6px 0; }

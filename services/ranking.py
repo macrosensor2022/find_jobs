@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from config.settings import Config
+from services.golden import golden_opportunity_score
 from services.matching import evaluate_job
 from services.opportunity import evaluate_opportunity
 from services.priority import (application_effort, application_priority,
@@ -61,11 +62,26 @@ def score_job(job, profile_skills=None, watchlist=None, weights=None,
     # Phase 10 — application effort (banded estimate from posting signals).
     effort = application_effort(_get('description'))
 
+    # V3 — Golden opportunity score: a sibling composite derived from the same
+    # sub-scores above. It never overrides a poor match.
+    auth_status = (match.get('authorization') or {}).get('status') or 'unknown'
+    golden_result = golden_opportunity_score(
+        match_score=match['score'],
+        freshness_score=opportunity.get('freshness', {}).get('score'),
+        auth_status=auth_status,
+        quality_score=quality['score'],
+        effort_estimate=effort,
+        industry_opp_score=_get('industry_opportunity_score'),
+        contact_relevance_score=_get('contact_relevance_score'),
+        competition_signal=_get('competition_signal'),
+    )
+
     return {
         'candidate_match_score': match['score'],
         'opportunity_score': opportunity['score'],
         'job_quality_score': quality['score'],
         'final_score': final,
+        'golden_opportunity_score': golden_result['score'],
         'application_priority_score': priority,
         'application_recommendation': recommendation['action'],
         'application_readiness_score': readiness['score'],
@@ -78,6 +94,7 @@ def score_job(job, profile_skills=None, watchlist=None, weights=None,
         'readiness': readiness,
         'recommendation': recommendation,
         'freshness': opportunity['freshness'],
+        'golden': golden_result,
         'scored_at': (now or datetime.now(timezone.utc)),
     }
 
@@ -133,6 +150,9 @@ def apply_to_model(job_model, result):
     job_model.application_recommendation = result.get('application_recommendation')
     job_model.application_readiness_score = result.get('application_readiness_score')
     job_model.application_effort_estimate = result.get('application_effort_estimate')
+
+    # ---- V3 — Golden opportunity (sibling signal; never overrides match) ----
+    job_model.golden_opportunity_score = result.get('golden_opportunity_score')
 
     readiness = result.get('readiness') or {}
     job_model.readiness_breakdown = json.dumps(readiness)

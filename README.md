@@ -43,6 +43,16 @@ Built with Flask + a responsive frontend. Repo: [macrosensor2022/find_jobs](http
 - **Skill-gap matrix** — per-requirement `MATCHED` / `PARTIAL` / `MISSING` against your profile
 - **Competition signal** from legitimate source data (never invented)
 - **Insights** — employer radar, market skills, search health
+- **Industry intelligence (V3)** — industry classification (`industry_label`,
+  `industry_opportunity_score`), a live **industry radar** ranked from the stored
+  scored pool, and **under-the-radar** hidden-fit jobs in non-core industries
+- **Contact discovery (V3)** — legitimate public contacts only; never fabricated.
+  Competing unknowns stay `UNKNOWN`
+- **Golden opportunity score (V3)** — sibling composite (fit + freshness +
+  authorization + quality + modest contact lift) that never lets contact
+  availability dominate a far-better fit
+- **Contact outreach (V3)** — working outreach drafts. Outreach is **never
+  auto-sent** (`no_auto_send == true`)
 
 ### F-1 / OPT realism
 - New-grad feed hard-drops unwinnable roles: PhD-gated, security-clearance, US-citizenship-only, and defense/intelligence contractor listings
@@ -131,6 +141,8 @@ python3 scripts/rescore_all.py
 
 ## Recent Updates
 
+- **V3 industry & contacts**: live industry radar, under-the-radar hidden-fit jobs, contact discovery + outreach (never fabricated; `UNKNOWN` when no evidence), golden opportunity score
+- **Scheduler**: supports a daily run **or** every-3-hours mode (configurable via the `schedule` preference / `SCHEDULE_MODE`, `SCHEDULE_INTERVAL_HOURS`) — always scrapes realistic, keepable postings
 - **Command-center scoring**: application priority + recommendation, readiness (≤94), effort (banded), role-family taxonomy, skill-gap matrix, hidden-fit detection, competition signal
 - **Analytics & health endpoints**: `/api/analytics/employer-radar`, `/api/analytics/market-skills`, `/api/search/health`, `/api/jobs/<id>/why-hidden`
 - **Freshness buckets**: `HOT → FRESH → RECENT → AGING → OLD → STALE`

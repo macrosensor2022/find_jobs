@@ -10,7 +10,7 @@ from backend.models import (
     MetroOpportunity, MetroSocLca, UnparsedLocation,
     ProfileSkill, ProfileExperience, ProfileEducation, ProfileProject,
     Preference, WatchlistCompany, Application, ApplicationEvent,
-    ApplicationPrep, Notification, SearchRun, SourceRun,
+    ApplicationPrep, Notification, SearchRun, SourceRun, Contact,
 )
 from config.settings import Config
 import json
@@ -267,6 +267,15 @@ def _migrate_add_columns(engine):
             'readiness_breakdown':         'TEXT',
             'skill_gap_matrix':            'TEXT',
             'hidden_fit':                  'BOOLEAN DEFAULT 0',
+            # V3 — Industry + golden + contact intelligence
+            'industry':                 'VARCHAR(64)',
+            'industry_label':           'VARCHAR(128)',
+            'under_the_radar':          'BOOLEAN DEFAULT 0',
+            'industry_opportunity':     'VARCHAR(16)',
+            'industry_opportunity_score': 'FLOAT',
+            'industry_evidence':        'TEXT',
+            'golden_opportunity_score': 'FLOAT',
+            'recommended_contact_json': 'TEXT',
         }),
         (UserProfile.__tablename__, {
             'grad_date':         'DATE',
@@ -412,8 +421,10 @@ def _seed_profile_data():
         },
         'schedule': {
             'enabled': Config.SCHEDULE_ENABLED,
+            'mode': Config.SCHEDULE_MODE,
             'hour': Config.SCHEDULE_HOUR,
             'minute': Config.SCHEDULE_MINUTE,
+            'interval_hours': Config.SCHEDULE_INTERVAL_HOURS,
             'timezone': Config.SCHEDULE_TIMEZONE,
             'sources': Config.DAILY_SOURCES,
         },
@@ -821,7 +832,9 @@ def get_briefing():
             'SearchRun': SearchRun,
             'WatchlistCompany': WatchlistCompany,
             'Notification': Notification,
+            'Contact': Contact,
         },
+        db=db,
         profile=UserProfile.query.first(),
         limit=max(1, min(limit, 50)),
         realistic=request.args.get('realistic', 'true').lower() != 'false',
@@ -1312,11 +1325,146 @@ def analytics_market_skills():
 
 @app.route('/api/search/health', methods=['GET'])
 def search_health_endpoint():
-    """Phase 20 — diagnostics for the search pipeline."""
+    """Phase 20 — diagnostics for the search pipeline.
+
+    V3 adds an independent contact-discovery health block.
+    """
     from services.analytics import search_health
     from backend.models import SearchRun
 
-    return jsonify(search_health(db, Job, SearchRun))
+    return jsonify(search_health(db, Job, SearchRun, Contact=Contact))
+
+
+# =============================================================================
+# V3 — Industry Radar + Company Radar + Contact Intelligence + Outreach
+# =============================================================================
+
+@app.route('/api/industry-radar', methods=['GET'])
+def industry_radar_endpoint():
+    """V3 Part 4 — industries ranked by opportunity from live stored jobs."""
+    from services.analytics import industry_radar
+
+    limit = request.args.get('limit', default=12, type=int)
+    days = request.args.get('days', default=30, type=int)
+    return jsonify({
+        'industries': industry_radar(db, Job, limit=limit, days=days),
+        'note': 'Values reflect stored scored jobs only. Competition is UNKNOWN '
+                'unless supported by actual evidence.',
+    })
+
+
+@app.route('/api/company-radar', methods=['GET'])
+def company_radar_endpoint():
+    """V3 Part 23 — per-company hiring activity + contactable personnel."""
+    from services.analytics import company_radar
+
+    company = request.args.get('company', '')
+    days = request.args.get('days', default=30, type=int)
+    return jsonify(company_radar(db, Job, Contact=Contact, company=company, days=days))
+
+
+@app.route('/api/jobs/<int:job_id>/contacts', methods=['GET'])
+def job_contacts(job_id):
+    """V3 — stored legitimate contacts for a job (never fabricated)."""
+    job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
+    contacts = [c.to_dict() for c in job.contacts]
+    if not contacts:
+        return jsonify({
+            'job_id': job_id,
+            'contacts': [],
+            'status': 'UNKNOWN',
+            'message': 'No legitimate public professional contact found for this job.',
+        })
+    return jsonify({'job_id': job_id, 'contacts': contacts, 'status': 'found'})
+
+
+@app.route('/api/jobs/<int:job_id>/outreach', methods=['POST', 'GET'])
+def job_outreach(job_id):
+    """V3 Part 14 — generate a personalized outreach draft. Never sends."""
+    from services.outreach import build_outreach
+
+    job = db.get_or_404(Job, job_id, description=f"Job with id {job_id} not found")
+    profile = UserProfile.query.first()
+    skills = [
+        (s.name, s.category, s.proficiency)
+        for s in ProfileSkill.query.filter_by(is_active=True).all()
+    ] or Config.PROFILE_SKILLS
+
+    # Use the stored recommended contact if present; otherwise a no-contact draft.
+    contact = None
+    if job.recommended_contact_json:
+        import json as _json
+        try:
+            contact = _json.loads(job.recommended_contact_json)
+        except (ValueError, TypeError):
+            contact = None
+
+    import json as _json
+    try:
+        matched = _json.loads(job.skill_gap_matrix) if job.skill_gap_matrix else []
+    except (ValueError, TypeError):
+        matched = []
+    matched_skills = [m.get('skill') for m in matched if m.get('matched')][:10] \
+        if isinstance(matched, list) else []
+    duties = []
+    try:
+        breakdown = _json.loads(job.match_breakdown or '{}')
+    except (ValueError, TypeError):
+        breakdown = {}
+    try:
+        reasons = _json.loads(job.match_reasons) if job.match_reasons else []
+    except (ValueError, TypeError):
+        reasons = []
+    duties = [d.replace('_', ' ') for d in reasons][:5]
+
+    outreach = build_outreach(
+        job,
+        contact=contact,
+        profile=profile.to_dict() if profile else None,
+        education=[e.to_dict() for e in ProfileEducation.query.all()],
+        experiences=[e.to_dict() for e in ProfileExperience.query.all()],
+        projects=[p.to_dict() for p in ProfileProject.query.all()],
+        profile_skills=skills,
+        matched_skills=matched_skills,
+        duties=duties,
+    )
+    return jsonify(outreach)
+
+
+@app.route('/api/contacts/<int:contact_id>/status', methods=['PUT'])
+def contact_update_status(contact_id):
+    """V3 Part 17-18 — manual contact-state tracking. Never auto-sends.
+
+    Accepts JSON: {status, method?, response_status?, follow_up_date?}.
+    """
+    contact = db.get_or_404(Contact, contact_id,
+                            description=f"Contact with id {contact_id} not found")
+    data = request.get_json(silent=True) or {}
+    status = (data.get('status') or '').upper()
+    valid = {'NOT_CONTACTED', 'DRAFT_READY', 'CONTACTED', 'REPLIED',
+             'NO_RESPONSE', 'FOLLOW_UP', 'NOT_RELEVANT'}
+    if status and status not in valid:
+        return jsonify({'error': f'Invalid status: {status}'}), 400
+
+    if status:
+        contact.contact_status = status
+        if status == 'CONTACTED':
+            from datetime import datetime as _dt, timezone as _tz
+            contact.contacted_at = _dt.now(_tz.utc)
+            contact.contact_method = data.get('method') or contact.contact_method
+            contact.response_status = data.get('response_status') or 'awaiting_reply'
+            contact.follow_up_count = (contact.follow_up_count or 0) + 0
+        if status in ('REPLIED', 'NO_RESPONSE'):
+            contact.response_status = data.get('response_status') or status
+        if data.get('follow_up_date'):
+            from datetime import datetime as _dt
+            contact.follow_up_date = _dt.fromisoformat(data['follow_up_date'])
+    if data.get('message_draft'):
+        contact.message_draft = data['message_draft']
+    if data.get('notes'):
+        contact.notes = data['notes']
+    db.session.commit()
+    return jsonify(contact.to_dict())
 
 
 @app.route('/api/jobs/<int:job_id>/why-hidden', methods=['GET'])

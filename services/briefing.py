@@ -165,12 +165,15 @@ def top_jobs(Job, limit=None, min_score=None, realistic=True, prefer_fresh=True)
     return pool[:limit]
 
 
-def build_briefing(models, profile=None, limit=None, realistic=True):
+def build_briefing(models, db=None, profile=None, limit=None, realistic=True):
     """Assemble the morning dashboard payload.
 
     `models` is a dict with the model classes so this stays importable without
     Flask: {'Job': Job, 'Application': Application, 'SearchRun': SearchRun,
-            'WatchlistCompany': WatchlistCompany, 'Notification': Notification}
+            'WatchlistCompany': WatchlistCompany, 'Notification': Notification,
+            'Contact': Contact}
+    `db` is the SQLAlchemy object used for the V3 industry/company radar
+    aggregates; it is optional so the briefing stays testable without Flask.
     """
     Job = models['Job']
     Application = models.get('Application')
@@ -225,6 +228,18 @@ def build_briefing(models, profile=None, limit=None, realistic=True):
 
     jobs = top_jobs(Job, limit=limit, realistic=realistic)
 
+    # V3 — Today Command Center sections (industry radar, under-the-radar,
+    # companies hiring, contact these people).
+    try:
+        radar = today_radar(models, db, limit=6)
+    except Exception:
+        radar = {'industry_radar': [], 'under_the_radar_jobs': [], 'companies_hiring': []}
+    try:
+        Contact = models.get('Contact')
+        contacts = contact_today(db, Contact, limit=10)
+    except Exception:
+        contacts = []
+
     return {
         'generated_at': now.isoformat(),
         'greeting_name': (profile.name.split()[0] if profile and profile.name else None),
@@ -245,6 +260,11 @@ def build_briefing(models, profile=None, limit=None, realistic=True):
         },
         'last_run': last_run,
         'top_jobs': [job.to_dict() for job in jobs],
+        # V3 — Today Command Center
+        'industry_radar': radar.get('industry_radar', []),
+        'under_the_radar_jobs': radar.get('under_the_radar_jobs', []),
+        'companies_hiring': radar.get('companies_hiring', []),
+        'contact_these_people': contacts,
     }
 
 
@@ -292,3 +312,78 @@ def source_metrics(models, days=30):
         entry['stored_jobs'] = Job.query.filter_by(source=source).count()
 
     return sorted(by_source.values(), key=lambda e: -e['jobs_accepted'])
+
+
+# =============================================================================
+# V3 — Today Command Center intelligence (Part 19)
+# =============================================================================
+
+def today_radar(models, db, limit=6):
+    """Industry + under-the-radar + company sections for the Today view.
+
+    All figures come from real stored jobs. Competition is UNKNOWN unless
+    legitimate evidence exists; nothing is fabricated.
+    """
+    from services.analytics import industry_radar, employer_radar
+
+    Job = models['Job']
+    try:
+        radar = industry_radar(db, Job, limit=limit)
+    except Exception:
+        radar = []
+
+    # Under-the-radar opportunities (jobs, not industries).
+    utr = applyable_query(Job).filter(
+        Job.under_the_radar.is_(True)
+    ).order_by(
+        Job.final_score.desc().nullslast()
+    ).limit(limit).all()
+
+    companies = []
+    try:
+        companies = employer_radar(db, Job, days=30, limit=limit)['active_employers']
+    except Exception:
+        companies = []
+
+    return {
+        'industry_radar': radar,
+        'under_the_radar_jobs': [j.to_dict() for j in utr],
+        'companies_hiring': companies,
+    }
+
+
+def contact_today(db, Contact, limit=10):
+    """Rank recommended contacts for the 'Contact These People' Today section.
+
+    Ranked by contact relevance + job priority + freshness. Only jobs whose
+    stored recommended contact is legitimate are included.
+    """
+    if Contact is None:
+        return []
+
+    rows = Contact.query.filter(
+        Contact.contact_status.notin_(['NOT_RELEVANT']),
+        Contact.is_recommended.is_(True),
+    ).order_by(
+        Contact.contact_relevance_score.desc().nullslast()
+    ).limit(limit * 2).all()
+
+    out = []
+    for c in rows:
+        job = c.job
+        if job is None or job.is_hidden or job.is_expired or job.duplicate_of_id:
+            continue
+        out.append({
+            'job_id': job.id,
+            'title': job.title,
+            'company': c.company or job.company,
+            'match_score': job.candidate_match_score,
+            'application_priority': job.application_priority_score,
+            'freshness_bucket': job.freshness_bucket,
+            'contact': c.to_dict(),
+        })
+    out.sort(
+        key=lambda r: (r.get('contact') or {}).get('contact_relevance_score') or 0,
+        reverse=True,
+    )
+    return out[:limit]

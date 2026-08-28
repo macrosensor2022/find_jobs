@@ -759,7 +759,118 @@ class JobScraperManager:
             job.location_opportunity_score,
             job.competition_score,
         )
-    
+
+        # ---- V3 — Industry intelligence + golden score ----------------------
+        self._apply_v3_enrichment(job, job_data)
+
+    def _apply_v3_enrichment(self, job: Job, job_data: dict):
+        """Apply V3 industry + contact snapshot + golden enrichment.
+
+        All values are evidence-derived; contact discovery is selective and only
+        persists when a legitimate public contact was found. Re-scoring with the
+        golden composite keeps the stored fields in lockstep.
+        """
+        import json
+
+        # 1) Industry classification from the job's own text + company.
+        from services.industry import classify_industry
+        try:
+            ind = classify_industry(
+                title=job.title, description=job.description,
+                company=job.company, source=job.source,
+            )
+            job.industry = ind['industry']
+            job.industry_label = ind['label']
+            job.under_the_radar = ind['under_the_radar']
+            job.industry_evidence = json.dumps(ind['evidence'])
+        except Exception:
+            logger.debug('Industry classification failed for job %s', job.id, exc_info=True)
+
+        # 2) Industry opportunity level + score for this industry (pool-based).
+        self._refresh_industry_opportunity(job)
+
+        # 3) Contact discovery (selective; never fabricates anything).
+        from services.contact_intelligence import should_search_contacts, discover
+        try:
+            job_payload = self._job_as_dict(job)
+            if should_search_contacts(job_payload):
+                result = discover(job_payload)
+                if result.get('status') == 'found' and result.get('contacts'):
+                    best = result['contacts'][0]
+                    job.recommended_contact_json = json.dumps(best)
+        except Exception:
+            logger.debug('Contact discovery failed for job %s', job.id, exc_info=True)
+
+        # 4) Golden score recompute now that industry/contact context exists.
+        self._refresh_golden(job)
+
+    def _job_as_dict(self, job: Job) -> dict:
+        return {
+            'title': job.title, 'company': job.company,
+            'location': job.location, 'description': job.description,
+            'source': job.source,
+            'industry_opportunity_score': job.industry_opportunity_score,
+            'contact_relevance_score': (
+                self._recommended_contact(job) or {}
+            ).get('contact_relevance_score'),
+            'competition_signal': job.competition_signal,
+            'application_url_status': job.application_url_status,
+            'application_priority_score': job.application_priority_score,
+            'candidate_match_score': job.candidate_match_score,
+            'role_family': job.role_family,
+            'contact_hints': [],
+        }
+
+    def _recommended_contact(self, job: Job):
+        import json as _json
+        if not job.recommended_contact_json:
+            return None
+        try:
+            return _json.loads(job.recommended_contact_json)
+        except (ValueError, TypeError):
+            return None
+
+    def _refresh_industry_opportunity(self, job: Job):
+        """Pull/refresh the industry opportunity level for the job's industry."""
+        from services.industry import industry_opportunity
+        from backend.models import Job as JobModel
+        if not job.industry:
+            return
+        try:
+            opp = industry_opportunity(self.db_session, JobModel, job.industry)
+            job.industry_opportunity = opp['opportunity']
+            job.industry_opportunity_score = opp['opportunity_score']
+        except Exception:
+            logger.debug('Industry opportunity refresh failed', exc_info=True)
+
+    def _refresh_golden(self, job: Job):
+        """Recompute the golden composite with post-scoring V3 context.
+
+        Industry opportunity and contact relevance become known only after the
+        initial scoring pass (which stored a neutral-baseline golden), so we
+        recompute here so the persisted value reflects actually-discovered
+        industry/contact signals. Contact never dominates — it carries a modest
+        weight inside the composite.
+        """
+        from services.golden import golden_opportunity_score
+
+        contact = self._recommended_contact(job) or {}
+        fresh = (job.freshness_bucket or 'unknown')
+        freshness_score = {'hot': 100.0, 'fresh': 85.0, 'recent': 65.0,
+                           'aging': 45.0, 'old': 25.0, 'stale': 10.0,
+                           'unknown': 50.0}.get(fresh, 50.0)
+        result = golden_opportunity_score(
+            match_score=job.candidate_match_score or 0,
+            freshness_score=freshness_score,
+            auth_status=job.sponsorship_status or 'unknown',
+            quality_score=job.job_quality_score or 0,
+            effort_estimate=job.application_effort_estimate,
+            industry_opp_score=job.industry_opportunity_score,
+            contact_relevance_score=contact.get('contact_relevance_score'),
+            competition_signal=job.competition_signal,
+        )
+        job.golden_opportunity_score = result['score']
+
     def scrape_all(self, sources: List[str] = None, keywords: List[str] = None,
                    locations: List[str] = None, trigger: str = 'manual') -> Dict:
         from config.settings import Config

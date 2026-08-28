@@ -261,6 +261,111 @@ function renderBriefing(data) {
                 ${run.duplicates} duplicates${run.avg_match !== null ? `, avg match ${run.avg_match}%` : ''}</span>
             ${errors}`;
     }
+
+    renderTodayV3(data);
+}
+
+// =============================================================================
+// V3 — Industry Radar + Under-the-radar + Contact These People
+// =============================================================================
+
+function renderTodayV3(data) {
+    const el = document.getElementById('v3TodayGrid');
+    if (!el) return;
+    const parts = [];
+
+    // --- Industry radar ---
+    const ind = data.industry_radar || [];
+    if (ind.length) {
+        const oppLevel = { HIGH: 'high', MEDIUM: 'medium', LOW: 'low', UNKNOWN: 'unknown' };
+        parts.push(`
+            <div class="v3-card v3-industry">
+                <h4><i class="fas fa-industry"></i> Industry radar</h4>
+                <p class="v3-note">Opportunity from your live scored job pool. Competition shows UNKNOWN unless real evidence exists.</p>
+                <ul class="v3-chips">
+                    ${ind.slice(0, 8).map(i => `
+                        <li class="chip ${oppLevel[i.opportunity] || 'unknown'}"
+                            title="${escapeHtml(i.label || i.industry)} — ${i.count} open, ${i.fresh_jobs} fresh, competition ${escapeHtml(i.competition)}">
+                            <strong>${escapeHtml(i.label || i.industry)}</strong>
+                            <span>${i.count} job${i.count === 1 ? '' : 's'} · ${i.opportunity}</span>
+                        </li>`).join('')}
+                </ul>
+            </div>`);
+    }
+
+    // --- Under-the-radar jobs ---
+    const utr = data.under_the_radar_jobs || [];
+    if (utr.length) {
+        parts.push(`
+            <div class="v3-card v3-utr">
+                <h4><i class="fas fa-radar"></i> Hidden-fit / under-the-radar</h4>
+                <ul class="v3-list">
+                    ${utr.slice(0, 5).map(j => `
+                        <li class="v3-job" data-job-id="${j.id}">
+                            <span class="v3-role">${escapeHtml(j.title)}</span>
+                            <span class="v3-company">@ ${escapeHtml(j.company)}</span>
+                            <span class="v3-meta">${j.industry_label ? escapeHtml(j.industry_label) : 'Industry unknown'}
+                              ${typeof j.golden_opportunity_score === 'number' ? `· golden ${Math.round(j.golden_opportunity_score)}` : ''}</span>
+                        </li>`).join('')}
+                </ul>
+            </div>`);
+    }
+
+    // --- Companies actively hiring ---
+    const comps = data.companies_hiring || [];
+    if (comps.length) {
+        parts.push(`
+            <div class="v3-card v3-companies">
+                <h4><i class="fas fa-building"></i> Companies actively hiring</h4>
+                <ul class="v3-list">
+                    ${comps.slice(0, 6).map(c => `
+                        <li class="v3-company">
+                            <span class="v3-name">${escapeHtml(c.company)}</span>
+                            <span class="v3-meta">${c.open_roles} open · ${c.strong_matches} strong${c.direct_hire ? ' · direct hire' : ''}</span>
+                        </li>`).join('')}
+                </ul>
+            </div>`);
+    }
+
+    // --- Contact these people ---
+    const contacts = data.contact_these_people || [];
+    if (contacts.length) {
+        parts.push(`
+            <div class="v3-card v3-contacts">
+                <h4><i class="fas fa-user-tie"></i> Contact these people</h4>
+                <ul class="v3-list">
+                    ${contacts.slice(0, 5).map(r => {
+                        const c = r.contact || {};
+                        const emailOk = c.email_state === 'VERIFIED_PUBLIC';
+                        const badge = emailOk
+                            ? '<span class="pill pill-good">email verified</span>'
+                            : (c.email_state === 'PATTERN_INFERRED'
+                                ? '<span class="pill pill-warn">pattern email</span>'
+                                : '<span class="pill pill-violet">no verified email</span>');
+                        return `
+                        <li class="v3-contact" data-job-id="${r.job_id}" data-contact="${encodeURIComponent(JSON.stringify(c))}">
+                            <span class="v3-name">${escapeHtml(c.contact_name || 'Contact')} ${badge}</span>
+                            <span class="v3-role">${escapeHtml(c.contact_role || '')}</span>
+                            <span class="v3-meta">${escapeHtml(r.company)} · ${escapeHtml(r.title)}</span>
+                        </li>`;
+                    }).join('')}
+                </ul>
+            </div>`);
+    }
+
+    el.innerHTML = parts.join('');
+
+    el.querySelectorAll('.v3-contact[data-contact]').forEach(el2 => {
+        el2.addEventListener('click', () => {
+            let c;
+            try { c = JSON.parse(decodeURIComponent(el2.dataset.contact)); } catch (e) { c = {}; }
+            openOutreachFor(c, el2.dataset.jobId);
+        });
+    });
+    el.querySelectorAll('[data-job-id]').forEach(el2 => {
+        if (el2.dataset.contact) return;
+        el2.addEventListener('click', () => openJobModal(parseInt(el2.dataset.jobId, 10)));
+    });
 }
 
 async function loadAttention() {
@@ -1284,6 +1389,13 @@ async function openJobModal(jobId) {
                         <span>${escapeHtml(job.competition_signal)}
                             ${job.applicant_count ? `· ${job.applicant_count} applicant(s)` : ''}</span>
                     </div>` : ''}
+                    ${job.industry_label ? `<div class="info-row">
+                        <span class="label">Industry:</span>
+                        <span>${escapeHtml(job.industry_label)}
+                            ${job.under_the_radar ? '<span class="pill pill-violet">under-the-radar</span>' : ''}
+                            ${job.industry_opportunity ? `<span class="muted-note">${escapeHtml(job.industry_opportunity)} opportunity</span>` : ''}
+                        </span>
+                    </div>` : ''}
                     <div class="info-row">
                         <span class="label">Experience required:</span>
                         <span>${job.required_years !== null && job.required_years !== undefined
@@ -1337,6 +1449,11 @@ async function openJobModal(jobId) {
                         <blockquote class="evidence">${escapeHtml(job.sponsorship_evidence)}</blockquote>
                         <span class="muted-note">Source: ${escapeHtml(job.sponsorship_evidence_source || 'unknown')}</span>
                     ` : '<span class="muted-note">No evidence text available.</span>'}
+                </div>
+
+                <div class="detail-v3" id="detailV3">
+                    <h4><i class="fas fa-user-tie"></i> Hiring contact & outreach</h4>
+                    <div class="v3-contact-block" id="detailContactBlock">Loading…</div>
                 </div>
 
                 <div class="detail-actions">
@@ -1449,9 +1566,69 @@ async function openJobModal(jobId) {
         }
 
         document.getElementById('jobModal').classList.add('active');
+        loadJobContactIntel(job.id);
     } catch (error) {
         console.error('Error opening job modal:', error);
     }
+}
+
+// V3 — load + render a job's hiring contact & outreach section
+async function loadJobContactIntel(jobId) {
+    const block = document.getElementById('detailContactBlock');
+    if (!block) return;
+    block.innerHTML = '<span class="muted-note">Loading contact evidence…</span>';
+    let contacts = [];
+    try {
+        const res = await fetchAPI(`/jobs/${jobId}/contacts`);
+        contacts = (res && res.contacts) || [];
+    } catch (e) { contacts = []; }
+
+    let outreachHTML = '';
+    let draft = '';
+    try {
+        const o = await fetchAPI(`/jobs/${jobId}/outreach`);
+        if (o && o.no_auto_send && (o.message_draft || o.email || o.linkedin_message)) {
+            draft = o.message_draft || o.email || o.linkedin_message || '';
+            outreachHTML = `
+                ${draft.split('\n').filter(Boolean).map(p => `<p>${escapeHtml(p)}</p>`).join('')}
+                <div class="muted-note">
+                    <i class="fas fa-lock"></i> Draft only — outreach is never sent automatically.
+                    ${o.channel === 'UNKNOWN' ? ' No verified channel; use your own judgment.' : `Suggested channel: ${escapeHtml(o.channel)}.`}
+                </div>`;
+        }
+    } catch (e) { /* outreach optional */ }
+
+    if (!contacts.length && !outreachHTML) {
+        block.innerHTML = `<div class="muted-note"><i class="fas fa-user-slash"></i>
+            No verified professional contact could be matched to this posting.
+            Hiring contact: UNKNOWN.</div>`;
+        return;
+    }
+
+    const contactHTML = contacts.map(c => {
+        const emailBadge = c.email_state === 'VERIFIED_PUBLIC'
+            ? '<span class="pill pill-green">🗂 verified</span>'
+            : (c.email_state === 'PATTERN_INFERRED'
+                ? '<span class="pill pill-warn">pattern email</span>'
+                : '<span class="pill pill-violet">no verified email</span>');
+        return `
+            <div class="v3contact">
+                <span class="v3-name">${escapeHtml(c.contact_name || 'Contact')} ${emailBadge}</span>
+                <span class="v3-role">${escapeHtml(c.contact_role || '')} · ${escapeHtml(c.contact_type || '')}</span>
+                ${c.email ? `<span class="v3-email">${escapeHtml(c.email)}</span>` : ''}
+                ${c.source_url ? `<span class="v3-meta">source: ${escapeHtml(c.source_url)}</span>` : ''}
+            </div>`;
+    }).join('');
+
+    const comp = contacts.length
+        ? '<br><div style="margin-top:8px"><i class="fas fa-user-tie"></i> <strong>Contact:</strong>' + contactHTML + '</div>'
+        : '';
+    block.innerHTML = comp + (outreachHTML ? `<div style="margin-top:10px"><strong>Outreach draft (working copy):</strong>${outreachHTML}</div>` : '');
+}
+
+async function openOutreachFor(contact, jobId) {
+    // Open the job modal (which renders the contact + draft) for this job.
+    if (jobId) { openJobModal(parseInt(jobId, 10)); }
 }
 
 async function toggleFavorite(btn, jobId) {

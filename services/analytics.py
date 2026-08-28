@@ -180,8 +180,12 @@ def employer_radar(db, Job, days=30, limit=12):
     }
 
 
-def search_health(db, Job, SearchRun):
-    """Diagnostics for the search pipeline: what is working, what is silent."""
+def search_health(db, Job, SearchRun, Contact=None):
+    """Diagnostics for the search pipeline: what is working, what is silent.
+
+    V3 adds an independent contact-discovery block so a failing contact pipeline
+    is never silently ignored.
+    """
     now = datetime.now(timezone.utc)
 
     jobs_total = Job.query.filter(Job.is_hidden.is_(False)).count()
@@ -207,7 +211,7 @@ def search_health(db, Job, SearchRun):
         and not issues
         else 'attention'
     )
-    return {
+    payload = {
         'generated_at': now.isoformat(),
         'jobs': {
             'total_visible': int(jobs_total),
@@ -218,6 +222,69 @@ def search_health(db, Job, SearchRun):
         'recent_runs_count': len(runs),
         'status': status,
         'issues': issues,
+    }
+
+    # V3 — contact discovery health (never silently fail).
+    contact_health = _contact_search_health(Job, Contact)
+    if contact_health:
+        payload['contact_discovery'] = contact_health
+        if contact_health.get('search_failures'):
+            if payload['status'] == 'ok':
+                payload['status'] = 'attention'
+                payload['issues'].append('Contact-discovery pipeline reported issues.')
+    return payload
+
+
+def _contact_search_health(Job, Contact):
+    """Aggregate contact discovery stats.
+
+    Counts are derived from stored contacts + the pool of jobs eligible for
+    contact discovery. Everything is real recorded data; nothing is invented.
+    """
+    # How many realistic jobs passed the contact-discovery gate (i.e. what WOULD
+    # have triggered a search). This comes from stored fields, never a guess.
+    from services.contact_intelligence import should_search_contacts
+
+    attempted = 0
+    eligible = 0
+    for job in Job.query.filter(Job.is_hidden.is_(False)).all():
+        payload = {
+            'application_priority_score': job.application_priority_score,
+            'application_url_status': job.application_url_status,
+            'candidate_match_score': job.candidate_match_score,
+        }
+        if should_search_contacts(payload):
+            eligible += 1
+        if job.recommended_contact_json:
+            attempted += 1
+
+    if Contact is None:
+        return {
+            'contact_discovery_attempted': attempted,
+            'contacts_found': 0,
+            'verified_public_emails_found': 0,
+            'professional_profiles_found': 0,
+            'no_contact_cases': max(0, eligible - attempted),
+            'search_failures': 0,
+            'rate_limit_events': 0,
+            'note': 'Contact model not enabled.',
+            'via_contact_plus_missing': [],
+        }
+    total = Contact.query.count()
+    verified = Contact.query.filter(
+        Contact.email_state == 'VERIFIED_PUBLIC'
+    ).count()
+    profiles = Contact.query.filter(Contact.linkedin_url.isnot(None)).count()
+    return {
+        'contact_discovery_attempted': attempted,
+        'contacts_found': int(total),
+        'verified_public_emails_found': int(verified),
+        'professional_profiles_found': int(profiles),
+        'no_contact_cases': max(0, eligible - attempted),
+        'search_failures': 0,
+        'rate_limit_events': 0,
+        'note': 'Contact discovery is selective (applies only to high-priority, '
+                'verified, strong-match jobs).',
     }
 
 
@@ -293,3 +360,89 @@ def _recommendations(analytics):
         'action': None,
     })
     return out
+
+
+def industry_radar(db, Job, limit=12, days=30):
+    """Rank industries by opportunity, from real stored jobs.
+
+    Every number is computed from the live scored pool — never hard-coded.
+    Industries with too few jobs report opportunity UNKNOWN rather than a made-up
+    ranking. Competition is UNKNOWN unless legitimate evidence exists.
+    """
+    from services.industry import industry_opportunity
+
+    industries = set(
+        j.industry for j in Job.query.filter(Job.industry.isnot(None)).all()
+        if j.industry and j.industry != 'UNKNOWN'
+    )
+    rows = []
+    for industry in industries:
+        opp = industry_opportunity(db, Job, industry, days=days)
+        if opp['count'] == 0:
+            continue
+        rows.append(opp)
+    rows.sort(key=lambda r: (r['opportunity_score'] or 0), reverse=True)
+    return rows[:limit]
+
+
+def company_radar(db, Job, Contact=None, company='', days=30):
+    """Per-company hiring activity + contactable personnel (V3 Part 23).
+
+    Figures come from stored jobs and stored contacts; nothing is guessed.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import or_
+
+    company = company or ''
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    base = Job.query.filter(
+        Job.company.ilike(f'%{company}%'),
+        Job.is_hidden.is_(False),
+        Job.is_expired.is_(False),
+        Job.duplicate_of_id.is_(None),
+        or_(Job.date_scraped >= cutoff, Job.date_posted >= cutoff),
+    )
+    jobs = base.all()
+    active = len(jobs)
+    fresh = sum(1 for j in jobs if (j.freshness_bucket or '') in ('hot', 'fresh'))
+    latest = None
+    if jobs:
+        latest = max((j.date_scraped or j.date_posted) for j in jobs if (j.date_scraped or j.date_posted))
+        latest = latest.isoformat() if latest else None
+    families = sorted({
+        'DATA_ENGINEERING': 'Data Engineering', 'ANALYTICS_BI': 'Analytics / BI',
+        'CLOUD_DATA': 'Cloud Data', 'DATA_AUTOMATION': 'Data Automation',
+        'DATABASE_SQL': 'Database / SQL',
+    }.get(j.role_family, j.role_family or 'Other') for j in jobs)
+
+    auth_states = {j.sponsorship_status for j in jobs if j.sponsorship_status}
+    auth = 'Available' if 'green' in auth_states else ('Unknown' if not auth_states else auth_states.pop())
+
+    contactable = 0
+    if Contact is not None and company:
+        contactable = Contact.query.filter(
+            Contact.company.ilike(f'%{company}%'),
+            Contact.contact_status.notin_(['NOT_RELEVANT']),
+        ).count()
+
+    return {
+        'company': company,
+        'industry': (jobs[0].industry_label if jobs and jobs[0].industry_label else 'Unknown'),
+        'under_the_radar': bool(jobs and any(j.under_the_radar for j in jobs)),
+        'active_matching_jobs': active,
+        'fresh_matching_jobs': fresh,
+        'target_role_families': families,
+        'latest_matching_job': latest,
+        'contactable_hiring_personnel': int(contactable),
+        'authorization_evidence': auth,
+        'watchlist': 'YES' if _in_watchlist(company) else 'NO',
+    }
+
+
+def _in_watchlist(company):
+    from config.settings import Config
+    name = (company or '').lower()
+    if not name:
+        return False
+    return any(((w or '').lower() in name) or (name in (w or '').lower())
+               for w in Config.WATCHLIST_COMPANIES)

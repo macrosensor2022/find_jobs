@@ -22,8 +22,10 @@ def _load_schedule(Preference, Config):
     """Schedule settings from the DB, falling back to config defaults."""
     defaults = {
         'enabled': Config.SCHEDULE_ENABLED,
+        'mode': Config.SCHEDULE_MODE,
         'hour': Config.SCHEDULE_HOUR,
         'minute': Config.SCHEDULE_MINUTE,
+        'interval_hours': Config.SCHEDULE_INTERVAL_HOURS,
         'timezone': Config.SCHEDULE_TIMEZONE,
         'sources': list(Config.DAILY_SOURCES),
     }
@@ -34,6 +36,13 @@ def _load_schedule(Preference, Config):
     except Exception:
         logger.debug('Could not read schedule preference; using defaults')
     return defaults
+
+
+def _next_daily_after(now, hour, minute):
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target
 
 
 def _timezone(name):
@@ -129,25 +138,37 @@ def start(app):
         logger.info('Daily scheduler disabled by configuration')
         return None
 
+    mode = schedule.get('mode', Config.SCHEDULE_MODE)
     hour = int(schedule.get('hour', 7))
     minute = int(schedule.get('minute', 0))
+    interval_hours = float(schedule.get('interval_hours', '3') or 3)
     tz_name = schedule.get('timezone', 'America/New_York')
+
+    if mode == 'daily':
+        sch_desc = 'daily at %02d:%02d %s' % (hour, minute, tz_name)
+    else:
+        sch_desc = 'every %.2g hours (%s)' % (interval_hours, tz_name)
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
 
         _scheduler = BackgroundScheduler(timezone=_timezone(tz_name))
-        _scheduler.add_job(
-            lambda: run_daily_search(app),
-            trigger='cron', hour=hour, minute=minute,
-            id='daily_search', replace_existing=True,
-            misfire_grace_time=3600, coalesce=True, max_instances=1,
-        )
+        if mode == 'daily':
+            _scheduler.add_job(
+                lambda: run_daily_search(app),
+                trigger='cron', hour=hour, minute=minute,
+                id='search_feed', replace_existing=True,
+                misfire_grace_time=3600, coalesce=True, max_instances=1,
+            )
+        else:
+            _scheduler.add_job(
+                lambda: run_daily_search(app),
+                trigger='interval', hours=interval_hours,
+                id='search_feed', replace_existing=True,
+                misfire_grace_time=3600, coalesce=True, max_instances=1,
+            )
         _scheduler.start()
-        logger.info(
-            'Daily scheduler started via APScheduler for %02d:%02d %s',
-            hour, minute, tz_name,
-        )
+        logger.info('Scheduler started via APScheduler for %s', sch_desc)
         return _scheduler
     except ImportError:
         logger.info('APScheduler not installed; using the built-in timer thread')
@@ -157,18 +178,21 @@ def start(app):
     def _loop():
         while not _stop_event.is_set():
             now = datetime.now(tzinfo)
-            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if target <= now:
-                target += timedelta(days=1)
+            if mode == 'daily':
+                target = _next_daily_after(now, hour, minute)
+                desc = 'daily search at %02d:%02d' % (hour, minute)
+            else:
+                target = now + timedelta(hours=interval_hours)
+                desc = 'search every %.2gh' % interval_hours
             wait_seconds = (target - now).total_seconds()
-            logger.info('Next daily search in %.1f hours', wait_seconds / 3600)
+            logger.info('Next search in %.1f hours (%s)', wait_seconds / 3600, desc)
             if _stop_event.wait(wait_seconds):
                 return
             try:
                 run_daily_search(app)
             except Exception:
-                logger.exception('Scheduled daily search crashed')
-            # Guard against clock skew re-triggering within the same minute.
+                logger.exception('Scheduled search crashed')
+            # Avoid tight re-triggering immediately after a run.
             time.sleep(61)
 
     _fallback_thread = threading.Thread(
@@ -176,14 +200,14 @@ def start(app):
     )
     _fallback_thread.start()
     logger.info(
-        'Daily scheduler thread started for %02d:%02d %s', hour, minute, tz_name,
+        'Daily scheduler thread started for %s', sch_desc
     )
     return _fallback_thread
 
 
 def next_run_time():
     if _scheduler is not None:
-        job = _scheduler.get_job('daily_search')
+        job = _scheduler.get_job('search_feed')
         if job and job.next_run_time:
             return job.next_run_time.isoformat()
     return None

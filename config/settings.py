@@ -664,9 +664,12 @@ class Config:
 
     # ---- Scheduler -----------------------------------------------------------
     SCHEDULE_ENABLED = os.getenv('SCHEDULE_ENABLED', 'true').lower() == 'true'
+    # 'daily' -> SCHEDULE_HOUR:SCHEDULE_MINUTE; 'interval' -> every SCHEDULE_INTERVAL_HOURS
+    SCHEDULE_MODE = os.getenv('SCHEDULE_MODE', 'interval')
     SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', '7'))
     SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', '0'))
     SCHEDULE_TIMEZONE = os.getenv('SCHEDULE_TIMEZONE', 'America/New_York')
+    SCHEDULE_INTERVAL_HOURS = float(os.getenv('SCHEDULE_INTERVAL_HOURS', '3'))
 
     # Sources used by the scheduled daily run (NUWorks + LinkedIn excluded)
     DAILY_SOURCES = [
@@ -870,3 +873,215 @@ class Config:
     LOCATION_BLOCK_MAX = float(os.getenv('LOCATION_BLOCK_MAX', '20'))
     # A role dimension below this means the title is not one of my target roles.
     ROLE_BLOCK_MIN = float(os.getenv('ROLE_BLOCK_MIN', '40'))
+
+    # =========================================================================
+    # V3 — Industry Intelligence + Hiring Manager / Recruiter Intelligence
+    # =========================================================================
+
+    # ---- Industry taxonomy -------------------------------------------------
+    # "core" == the user's conventional high-volume target industries.
+    # "under-the-radar" == outside those, surfaced as a research signal (NOT a
+    # claim of lower competition).
+    CORE_INDUSTRIES = [
+        'TECHNOLOGY', 'FINANCE', 'HEALTHCARE', 'CONSULTING',
+        'RETAIL', 'INSURANCE', 'TELECOMMUNICATIONS', 'GOVERNMENT', 'EDUCATION',
+    ]
+    UNDER_THE_RADAR_INDUSTRIES = [
+        'MANUFACTURING', 'ENERGY', 'LOGISTICS', 'SUPPLY_CHAIN', 'AGRICULTURE',
+        'CONSTRUCTION', 'WATER', 'INDUSTRIAL_AUTOMATION', 'CHEMICALS',
+        'AEROSPACE', 'DEFENSE', 'REAL_ESTATE', 'FOOD', 'MINING',
+        'ENVIRONMENTAL_SERVICES',
+    ]
+
+    # Title/description keyword evidence -> industry. First match wins. These
+    # are hints combined with job content; they never override a poor role match.
+    INDUSTRY_SIGNALS = {
+        'TECHNOLOGY': [
+            'software', 'technology', 'tech ', 'platform', 'cloud', 'saas',
+            'data center', 'internet', 'developer', 'engineering',
+        ],
+        'FINANCE': [
+            'bank', 'financial', 'finance', 'investment', 'asset management',
+            'hedge fund', 'capital', 'credit', 'trading', 'payments', 'wealth',
+            'insurance',
+        ],
+        'HEALTHCARE': [
+            'health', 'medical', 'pharma', 'biotech', 'clinical', 'hospital',
+            'care ', 'wellness', 'diagnostic',
+        ],
+        'CONSULTING': [
+            'consult', 'advisory', 'strategy',
+        ],
+        'RETAIL': [
+            'retail', 'e-commerce', 'ecommerce', 'commerce', 'consumer',
+            'store',
+        ],
+        'INSURANCE': [
+            'insurance', 'underwriting', 'actuarial', 'reinsurance',
+        ],
+        'TELECOMMUNICATIONS': [
+            'telecom', 'telecommunication', 'network', 'wireless', '5g', 'broadband',
+        ],
+        'GOVERNMENT': [
+            'government', 'federal', 'public sector', 'municipal', 'state agency',
+            'agency', 'civic',
+        ],
+        'EDUCATION': [
+            'education', 'university', 'school', 'college', 'campus',
+        ],
+        'MANUFACTURING': [
+            'manufactur', 'industrial', 'factory', 'plant', 'production ',
+            'automotive', 'semiconductor', 'electronics manufacturing',
+        ],
+        'ENERGY': [
+            'energy', 'utilities', 'electric', 'solar', 'renewable', 'power ',
+            'oil', 'gas', 'grid',
+        ],
+        'LOGISTICS': [
+            'logistic', 'transportation', 'shipping', 'freight', 'supply chain',
+            'warehouse', 'distribution', 'fleet', 'delivery',
+        ],
+        'SUPPLY_CHAIN': [
+            'supply chain', 'procurement', 'sourcing', 'inventory',
+        ],
+        'AGRICULTURE': [
+            'agriculture', 'agtech', 'agri', 'farming', 'crop', 'food processing',
+        ],
+        'CONSTRUCTION': [
+            'construction', 'infrastructure', 'real estate development', 'engineering & construction',
+        ],
+        'WATER': [
+            'water', 'wastewater', 'utilities - water',
+        ],
+        'INDUSTRIAL_AUTOMATION': [
+            'automation', 'industrial automation', 'robotics', 'control system',
+            'plc', 'scada',
+        ],
+        'CHEMICALS': [
+            'chemical', 'specialty chemical', 'petrochemical',
+        ],
+        'AEROSPACE': [
+            'aerospace', 'aviation', 'aircraft', 'space',
+        ],
+        'DEFENSE': [
+            'defense', 'defence', 'military', 'intelligence', 'missile',
+            'munitions', 'defense contractor',
+        ],
+        'REAL_ESTATE': [
+            'real estate', 'property', 'facilities', 'asset management real estate',
+        ],
+        'FOOD': [
+            'food', 'food tech', 'restaurants', 'beverage', 'grocery',
+        ],
+        'MINERALS': [
+            'mining', 'minerals', 'metals',
+        ],
+        'ENVIRONMENTAL_SERVICES': [
+            'environmental', 'recycling', 'waste management', 'sustainability',
+        ],
+    }
+    DEFAULT_INDUSTRY = 'UNKNOWN'
+
+    # Industry names shown to the user, mapped from the internal label.
+    INDUSTRY_LABELS = {
+        'TECHNOLOGY': 'Technology / Software',
+        'FINANCE': 'Finance / Banking / Fintech',
+        'HEALTHCARE': 'Healthcare / Medical',
+        'CONSULTING': 'Consulting',
+        'RETAIL': 'Retail / Ecommerce',
+        'INSURANCE': 'Insurance',
+        'TELECOMMUNICATIONS': 'Telecommunications',
+        'GOVERNMENT': 'Government',
+        'EDUCATION': 'Education',
+        'MANUFACTURING': 'Manufacturing / Industrial',
+        'ENERGY': 'Energy / Utilities',
+        'LOGISTICS': 'Logistics / Transportation',
+        'SUPPLY_CHAIN': 'Supply Chain',
+        'AGRICULTURE': 'Agriculture / Agtech',
+        'CONSTRUCTION': 'Construction / Infrastructure',
+        'WATER': 'Water / Wastewater',
+        'INDUSTRIAL_AUTOMATION': 'Industrial Automation',
+        'CHEMICALS': 'Chemicals',
+        'AEROSPACE': 'Aerospace',
+        'DEFENSE': 'Defense',
+        'REAL_ESTATE': 'Real Estate / Facilities',
+        'FOOD': 'Food / Food Tech',
+        'MINERALS': 'Mining / Materials',
+        'ENVIRONMENTAL_SERVICES': 'Environmental Services',
+    }
+
+    # Industry opportunity weights (aggregated across the live scored pool).
+    INDUSTRY_OPPORTUNITY_WEIGHTS = {
+        'matching_job_count': 0.30,
+        'fresh_jobs': 0.20,
+        'entry_level_jobs': 0.10,
+        'target_role_family_jobs': 0.15,
+        'url_verify_rate': 0.10,
+        'authorization_evidence_rate': 0.10,
+        'competition': 0.05,
+    }
+    INDUSTRY_OPPORTUNITY_MIN_JOBS = int(os.getenv('INDUSTRY_OPPORTUNITY_MIN_JOBS', '2'))
+
+    # ---- Golden opportunity score (V3 §21) ---------------------------------
+    # Combined "how valuable right now" score. Reuses existing sub-scores and is
+    # a SIBLING signal to final_score — never overrides a poor match. Weights
+    # are normalized inside score_golden.
+    GOLDEN_SCORE_WEIGHTS = {
+        'job_fit': 0.28,          # candidate_match_score
+        'freshness': 0.18,        # freshness score
+        'authorization': 0.16,    # sponsorship/authorization compat
+        'job_quality': 0.14,      # job_quality_score
+        'application_effort': 0.08,  # lower effort -> higher
+        'industry_opportunity': 0.07,
+        'contact_relevance': 0.05,
+        'competition': 0.04,      # only when evidence exists
+    }
+    # Contact relevance sub-weights (evidence quality dominates).
+    CONTACT_RELEVANCE_WEIGHTS = {
+        'role_match': 0.30,
+        'department_match': 0.20,
+        'seniority': 0.15,
+        'company_matches': 0.10,
+        'role_family': 0.10,
+        'evidence_quality': 0.15,
+    }
+
+    # ---- Contact discovery gating (selective, Part 13) --------------------
+    CONTACT_TRIGGER_PRIORITY = float(os.getenv('CONTACT_TRIGGER_PRIORITY', '85'))
+    CONTACT_REQUIRE_VERIFIED_URL = True      # only for verified apply URLs
+    CONTACT_REQUIRE_STRONG_MATCH = float(os.getenv('CONTACT_REQUIRE_STRONG_MATCH', '75'))
+
+    # Contact relevance thresholds
+    CONTACT_RELEVANCE_HIGH = 80.0
+    CONTACT_RELEVANCE_MEDIUM = 55.0
+    CONTACT_RELEVANCE_LOW = 30.0
+
+    # Confidence labels
+    CONTACT_CONFIDENCE_HIGH = 'HIGH'
+    CONTACT_CONFIDENCE_MEDIUM = 'MEDIUM'
+    CONTACT_CONFIDENCE_LOW = 'LOW'
+    CONTACT_CONFIDENCE_UNKNOWN = 'UNKNOWN'
+
+    # Email states
+    EMAIL_VERIFIED_PUBLIC = 'VERIFIED_PUBLIC'
+    EMAIL_PUBLIC_UNVERIFIED = 'PUBLIC_UNVERIFIED'
+    EMAIL_PATTERN_INFERRED = 'PATTERN_INFERRED'
+    EMAIL_NOT_FOUND = 'NOT_FOUND'
+    EMAIL_UNKNOWN = 'UNKNOWN'
+
+    # Default outreach cadence (in days) for follow-up scheduling. Never auto-
+    # sends, only builds a draft the user approves.
+    OUTREACH_FOLLOWUP_DAYS = int(os.getenv('OUTREACH_FOLLOWUP_DAYS', '7'))
+
+    # Friendliest recruiting-contact role labels, in discovery priority
+    # order (hiring manager → technical recruiter → university recruiter → …).
+    CONTACT_PRIORITY_TYPES = [
+        'hiring_manager', 'engineering_manager', 'data_manager',
+        'technical_recruiter', 'university_recruiter', 'talent_acquisition',
+        'department_leader',
+    ]
+
+    # ---- V3 source_type labels (used by industry/contact evidence) --------
+    SOURCE_TYPE_LABELS = {
+        'curated_community_github': 'Curated community GitHub new-grad list',
+    }

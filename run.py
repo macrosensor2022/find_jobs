@@ -23,11 +23,18 @@ def main():
 
     handle = scheduler.start(app)
     if handle is not None:
-        print(
-            f"  Daily search scheduled for "
-            f"{Config.SCHEDULE_HOUR:02d}:{Config.SCHEDULE_MINUTE:02d} "
-            f"{Config.SCHEDULE_TIMEZONE}"
-        )
+        mode = getattr(Config, 'SCHEDULE_MODE', 'daily')
+        if mode == 'daily':
+            print(
+                f"  Search scheduled daily at "
+                f"{Config.SCHEDULE_HOUR:02d}:{Config.SCHEDULE_MINUTE:02d} "
+                f"{Config.SCHEDULE_TIMEZONE}"
+            )
+        else:
+            print(
+                f"  Search scheduled every "
+                f"{Config.SCHEDULE_INTERVAL_HOURS:g} hours (realistic jobs only)"
+            )
     else:
         print("  Daily search scheduler is disabled")
 
