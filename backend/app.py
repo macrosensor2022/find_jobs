@@ -24,8 +24,9 @@ import copy
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.engine import Engine
 
-# Expected graduation from the candidate profile (MS CS, Northeastern).
-_GRAD_DATE = date(2027, 5, 1)
+# Expected graduation comes from Config.EDUCATION (the single source) rather
+# than a second literal here. Only used to seed a profile that does not exist
+# yet; the stored profile owns the value afterwards.
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -507,6 +508,16 @@ app.config.from_object(Config)
 CORS(app)
 db.init_app(app)
 
+if (Config.SECRET_KEY == getattr(Config, 'DEV_SECRET_KEY', None)
+        and not Config.TESTING_MODE):
+    # The app binds 0.0.0.0, so this matters as soon as it is reachable by
+    # anything but this machine.
+    logger.warning(
+        'SECRET_KEY is the shared development default. Set SECRET_KEY in .env '
+        'before exposing this app to a network: '
+        'python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+
 
 @sqlalchemy_event.listens_for(Engine, 'connect')
 def _sqlite_pragmas(dbapi_connection, connection_record):
@@ -546,7 +557,7 @@ with app.app_context():
             linkedin_url=getattr(Config, 'DEFAULT_LINKEDIN_URL', ''),
             resume_path=Config.RESUME_PATH,
             target_role=Config.DEFAULT_TARGET_ROLE,
-            grad_date=_GRAD_DATE,
+            grad_date=Config.grad_date(),
             stem_eligible=True,
         )
         db.session.add(profile)
@@ -562,7 +573,7 @@ with app.app_context():
         )
         profile.target_role = profile.target_role or Config.DEFAULT_TARGET_ROLE
         if not profile.grad_date:
-            profile.grad_date = _GRAD_DATE
+            profile.grad_date = Config.grad_date()
         if profile.stem_eligible is None:
             profile.stem_eligible = True
         db.session.commit()
@@ -1092,7 +1103,18 @@ def _schedule_followup(application):
     )
 
 
+# Stored preferences whose value an explicitly-set environment variable
+# outranks. Same precedence rule as the scheduler:
+#   explicit environment variable > stored DB preference > code default
+_PREFERENCE_ENV_KEYS = {
+    'followup_days': 'FOLLOWUP_DAYS',
+}
+
+
 def _preference(key, fallback=None):
+    env_name = _PREFERENCE_ENV_KEYS.get(key)
+    if env_name and Config.env_overrides(env_name):
+        return fallback
     row = Preference.query.filter_by(key=key).first()
     if row is None:
         return fallback

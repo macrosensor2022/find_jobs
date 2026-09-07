@@ -1,8 +1,21 @@
 #!/usr/bin/env python
-"""
-End-to-end platform tests.
-Run with: python -m tests.test_platform
-Requires the Flask server to be running (python run.py).
+"""Manual end-to-end platform check against a RUNNING server.
+
+    python tests/platform_check.py                 # against localhost:8080
+    TEST_BASE_URL=http://host:port python tests/platform_check.py
+
+This is NOT part of the automated suite and pytest must never collect it:
+
+* it talks to a live server over HTTP, so it is not hermetic
+* two of its checks POST /api/scrape/start, which writes to whatever database
+  that server is using -- the real instance/jobs.db in normal use
+* its helpers record failures in a counter instead of raising, so under pytest
+  every function reported green even when pointed at a dead port
+
+Hence the module name (not test_*.py) and the check_* function names (not
+test_*). Exit status is 0 only when every check passed, so it is safe to use
+in a script or CI step. The hermetic equivalents live in
+tests/test_api_contract.py.
 """
 
 import os
@@ -34,7 +47,7 @@ def fail(name, msg):
     print(f"  [FAIL] {name}: {msg}")
 
 
-def test_stats():
+def check_stats():
     """GET /api/stats returns totals and breakdowns."""
     try:
         r = requests.get(f"{BASE}/api/stats", timeout=TIMEOUT)
@@ -49,7 +62,7 @@ def test_stats():
         fail("GET /api/stats", str(e))
 
 
-def test_jobs_list():
+def check_jobs_list():
     """GET /api/jobs returns paginated jobs with correct shape."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 5}, timeout=TIMEOUT)
@@ -71,7 +84,7 @@ def test_jobs_list():
         fail("GET /api/jobs", str(e))
 
 
-def test_jobs_filter_source():
+def check_jobs_filter_source():
     """GET /api/jobs?source=X returns only jobs from that source."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 50, "source": "remoteok"}, timeout=TIMEOUT)
@@ -86,7 +99,7 @@ def test_jobs_filter_source():
         fail("GET /api/jobs?source=...", str(e))
 
 
-def test_jobs_filter_date():
+def check_jobs_filter_date():
     """GET /api/jobs?date_filter=today returns 200 and valid list."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 5, "date_filter": "today"}, timeout=TIMEOUT)
@@ -100,7 +113,7 @@ def test_jobs_filter_date():
         fail("GET /api/jobs?date_filter=...", str(e))
 
 
-def test_jobs_search():
+def check_jobs_search():
     """GET /api/jobs?search=X returns 200 and list (keyword in title/company/description)."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 5, "search": "data"}, timeout=TIMEOUT)
@@ -114,7 +127,7 @@ def test_jobs_search():
         fail("GET /api/jobs?search=...", str(e))
 
 
-def test_jobs_filter_location():
+def check_jobs_filter_location():
     """GET /api/jobs?location=X returns 200."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 5, "location": "Remote"}, timeout=TIMEOUT)
@@ -128,7 +141,7 @@ def test_jobs_filter_location():
         fail("GET /api/jobs?location=...", str(e))
 
 
-def test_job_detail():
+def check_job_detail():
     """GET /api/jobs/:id returns one job."""
     try:
         r = requests.get(f"{BASE}/api/jobs", params={"per_page": 1}, timeout=TIMEOUT)
@@ -149,7 +162,7 @@ def test_job_detail():
         fail("GET /api/jobs/:id", str(e))
 
 
-def test_profile():
+def check_profile():
     """GET /api/profile returns profile or empty."""
     try:
         r = requests.get(f"{BASE}/api/profile", timeout=TIMEOUT)
@@ -163,7 +176,7 @@ def test_profile():
         fail("GET /api/profile", str(e))
 
 
-def test_config():
+def check_config():
     """GET /api/config/locations and keywords return arrays."""
     try:
         r = requests.get(f"{BASE}/api/config/locations", timeout=TIMEOUT)
@@ -181,7 +194,7 @@ def test_config():
         fail("GET /api/config", str(e))
 
 
-def test_scrape_and_match():
+def check_scrape_and_match():
     """POST /api/scrape/start with minimal payload; then verify jobs match query."""
     try:
         payload = {
@@ -233,7 +246,7 @@ def test_scrape_and_match():
         fail("scrape/start", str(e))
 
 
-def test_scrape_empty_locations_default():
+def check_scrape_empty_locations_default():
     """POST /api/scrape/start with empty locations still runs (backend uses default)."""
     try:
         payload = {
@@ -264,17 +277,17 @@ def test_scrape_empty_locations_default():
 
 def main():
     print(f"\nPlatform tests against {BASE}\n")
-    test_stats()
-    test_jobs_list()
-    test_jobs_filter_source()
-    test_jobs_filter_date()
-    test_jobs_search()
-    test_jobs_filter_location()
-    test_job_detail()
-    test_profile()
-    test_config()
-    test_scrape_and_match()
-    test_scrape_empty_locations_default()
+    check_stats()
+    check_jobs_list()
+    check_jobs_filter_source()
+    check_jobs_filter_date()
+    check_jobs_search()
+    check_jobs_filter_location()
+    check_job_detail()
+    check_profile()
+    check_config()
+    check_scrape_and_match()
+    check_scrape_empty_locations_default()
     print(f"\nTotal: {passed} passed, {failed} failed")
     if errors:
         print("\nFailures:")

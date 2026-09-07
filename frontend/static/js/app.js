@@ -34,8 +34,58 @@ document.addEventListener('DOMContentLoaded', () => {
     initApplications();
     initCompanies();
     loadSourceConfig();
+    loadSidebarProfile();
     loadToday();
 });
+
+// The sidebar identity comes from /api/profile — the same record the Profile
+// page edits — so there is one authoritative profile rather than a copy baked
+// into index.html.
+async function loadSidebarProfile() {
+    try {
+        renderSidebarProfile(await fetchAPI('/profile'));
+    } catch (err) {
+        console.warn('Could not load profile for the sidebar', err);
+    }
+}
+
+function renderSidebarProfile(profile) {
+    if (!profile) return;
+    const name = (profile.name || '').trim();
+    const nameEl = document.getElementById('sidebarProfileName');
+    const roleEl = document.getElementById('sidebarProfileRole');
+    const avatarEl = document.getElementById('sidebarProfileAvatar');
+
+    if (nameEl) nameEl.textContent = name || 'Set up your profile';
+
+    // Prefer the current education line; fall back to the target role.
+    const current = (profile.education || []).find(e => e.is_current)
+        || (profile.education || [])[0];
+    const role = current && current.degree
+        ? `${current.degree}${current.school ? ` @ ${current.school}` : ''}`
+        : (profile.target_role || '');
+    if (roleEl) roleEl.textContent = role;
+
+    // Initials are drawn locally. This used to be an <img> pointing at
+    // github.com, which fetched a third-party image on every page load purely
+    // to render an avatar.
+    if (avatarEl) {
+        const initials = name
+            .split(/\s+/).filter(Boolean).slice(0, 2)
+            .map(part => part[0].toUpperCase()).join('');
+        avatarEl.textContent = initials || '?';
+    }
+
+    const ghLink = document.getElementById('profileGithubLink');
+    if (ghLink) {
+        if (profile.github_url) {
+            ghLink.href = profile.github_url;
+            ghLink.hidden = false;
+        } else {
+            ghLink.hidden = true;
+        }
+    }
+}
 
 // Which sources can run, and why the others cannot. Used by empty states and
 // the Scraper page so a missing API key is never silently reported as "0 jobs".
@@ -2274,9 +2324,13 @@ function initProfile() {
                 method: 'PUT',
                 body: JSON.stringify(data)
             });
-            alert('Profile saved!');
+            // The sidebar reads the same record, so refresh it rather than
+            // letting the two drift until the next page load.
+            await loadSidebarProfile();
+            showToast('Profile saved', 'success');
         } catch (error) {
             console.error('Error saving profile:', error);
+            showToast(error.message || 'Could not save profile', 'error');
         }
     });
 

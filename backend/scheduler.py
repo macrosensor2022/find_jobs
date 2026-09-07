@@ -19,7 +19,19 @@ _stop_event = threading.Event()
 
 
 def _load_schedule(Preference, Config):
-    """Schedule settings from the DB, falling back to config defaults."""
+    """Resolve schedule settings.
+
+    Precedence, applied per key:
+
+        explicit environment variable  >  stored DB preference  >  code default
+
+    The stored preference used to win unconditionally. It is seeded once on
+    first run, so after that editing ``SCHEDULE_ENABLED`` in ``.env`` had no
+    effect at all — the value was read, then silently overwritten by the row.
+
+    Environment now wins where it was explicitly set, which keeps ``.env`` an
+    honest contract while leaving every unset key editable from the UI.
+    """
     defaults = {
         'enabled': Config.SCHEDULE_ENABLED,
         'mode': Config.SCHEDULE_MODE,
@@ -29,12 +41,26 @@ def _load_schedule(Preference, Config):
         'timezone': Config.SCHEDULE_TIMEZONE,
         'sources': list(Config.DAILY_SOURCES),
     }
+    env_keys = getattr(Config, 'SCHEDULE_ENV_KEYS', {})
+    overridden = []
     try:
         row = Preference.query.filter_by(key='schedule').first()
         if row and isinstance(row.parsed, dict):
-            defaults.update({k: v for k, v in row.parsed.items() if v is not None})
+            for key, value in row.parsed.items():
+                if value is None:
+                    continue
+                env_name = env_keys.get(key)
+                if env_name and Config.env_overrides(env_name):
+                    overridden.append(env_name)
+                    continue
+                defaults[key] = value
     except Exception:
         logger.debug('Could not read schedule preference; using defaults')
+    if overridden:
+        logger.info(
+            'Schedule: environment overrides stored preference for %s',
+            ', '.join(sorted(set(overridden))),
+        )
     return defaults
 
 

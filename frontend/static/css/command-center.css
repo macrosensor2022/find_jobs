@@ -438,6 +438,21 @@
 .notice-list { margin: 6px 0 6px 18px; padding: 0; }
 .notice-list li { margin-bottom: 3px; }
 
+/* Sidebar avatar drawn from the profile's initials — no outbound image
+   request, and nothing tied to one particular person. */
+.profile-avatar-initials {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 40px;
+    background: var(--accent, #6366f1);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    user-select: none;
+}
+
 /* Scraper page: last-run + scheduler summary. */
 .last-scrape-panel:empty { display: none; }
 .scrape-status-row {

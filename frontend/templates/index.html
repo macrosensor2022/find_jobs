@@ -63,11 +63,16 @@
             </nav>
             
             <div class="sidebar-footer">
+                <!-- Populated from /api/profile by renderSidebarProfile(). No
+                     identity is hardcoded here, and the avatar is drawn locally
+                     from the name's initials rather than fetched from
+                     github.com. -->
                 <div class="profile-card">
-                    <img src="https://github.com/macrosensor2022.png" alt="Profile" class="profile-avatar">
+                    <div class="profile-avatar profile-avatar-initials" id="sidebarProfileAvatar"
+                         aria-hidden="true"></div>
                     <div class="profile-info">
-                        <span class="profile-name">Vinay Varshigan</span>
-                        <span class="profile-role">MS CS @ Northeastern</span>
+                        <span class="profile-name" id="sidebarProfileName">&nbsp;</span>
+                        <span class="profile-role" id="sidebarProfileRole">&nbsp;</span>
                     </div>
                 </div>
             </div>
@@ -733,17 +738,17 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Name</label>
-                                        <input type="text" id="profileName" value="Vinay Varshigan">
+                                        <input type="text" id="profileName" placeholder="Your name">
                                     </div>
                                     <div class="form-group">
                                         <label>Email</label>
-                                        <input type="email" id="profileEmail" placeholder="your.email@northeastern.edu">
+                                        <input type="email" id="profileEmail" placeholder="you@example.com">
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>GitHub URL</label>
-                                        <input type="url" id="profileGithub" value="https://github.com/macrosensor2022">
+                                        <input type="url" id="profileGithub" placeholder="https://github.com/...">
                                     </div>
                                     <div class="form-group">
                                         <label>LinkedIn URL</label>
@@ -823,7 +828,8 @@
                         <div class="card-body">
                             <p class="muted-note">These open the real websites. They are not integrated scrapers.</p>
                             <div class="quick-links">
-                                <a href="https://github.com/macrosensor2022" target="_blank" class="quick-link">
+                                <a href="#" target="_blank" rel="noopener"
+                                   class="quick-link" id="profileGithubLink" hidden>
                                     <i class="fab fa-github"></i>
                                     GitHub Profile
                                 </a>

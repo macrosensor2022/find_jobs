@@ -35,6 +35,20 @@ def _under_test():
     )
 
 
+def env_is_set(name):
+    """True when this environment variable was explicitly provided.
+
+    Config precedence across the app is:
+
+        explicit environment variable  >  stored DB preference  >  code default
+
+    Distinguishing "explicitly set to the default value" from "not set" is the
+    whole point: without it, a preference row seeded once on first run silently
+    overrode ``.env`` forever, so editing ``SCHEDULE_ENABLED`` did nothing.
+    """
+    return name in os.environ and os.environ[name].strip() != ''
+
+
 UNDER_TEST = _under_test()
 _DEFAULT_DB = (
     f"sqlite:///{os.path.join(tempfile.gettempdir(), 'jobtracker_test.db')}"
@@ -43,7 +57,10 @@ _DEFAULT_DB = (
 
 
 class Config:
-    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+    # Left as a known development value when unset. `backend/app.py` warns at
+    # startup so it cannot silently become a deployment's real secret.
+    DEV_SECRET_KEY = 'dev-secret-key-change-in-production'
+    SECRET_KEY = os.getenv('SECRET_KEY') or DEV_SECRET_KEY
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', _DEFAULT_DB)
     TESTING_MODE = UNDER_TEST
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -494,16 +511,34 @@ class Config:
     FRESHNESS_FAST_HOURS = int(os.getenv('FRESHNESS_FAST_HOURS', 24))
     
     # ---- NUWorks: disabled from the normal workflow (code kept, isolated) ------
-    NUWORKS_ENABLED = os.getenv('NUWORKS_ENABLED', 'false').lower() == 'true'
+    #
+    # ONE switch. There were briefly two — `NUWORKS_ENABLED`, checked by
+    # `init_nuworks()` and the /api/nuworks routes, and `ENABLE_NUWORKS`, read
+    # only by the source registry — so setting the documented one passed the
+    # source-health check and still raised "NUWorks is disabled" at init.
+    #
+    # `NUWORKS_ENABLED` is authoritative and is what .env.example documents.
+    # `ENABLE_NUWORKS` is accepted as an alias so the ENABLE_<SOURCE> spelling
+    # used by the other ten sources keeps working, but everything reads this
+    # single attribute.
+    NUWORKS_ENABLED = os.getenv(
+        'NUWORKS_ENABLED', os.getenv('ENABLE_NUWORKS', 'false')
+    ).lower() == 'true'
 
     # ---- Candidate profile (authoritative; seeds the DB on first run) ----------
+    # The authoritative candidate education record. `GRAD_DATE` below is
+    # derived from it, so the expected graduation date exists in exactly one
+    # place. It previously lived here as '2027-05-01', again as a literal in
+    # backend/app.py, and as Dec 2027 in PROFILE_SUMMARY and the stored
+    # profile — three sources, two answers.
     EDUCATION = [
         {
             'degree': 'MS',
             'field': 'Computer Science',
             'school': 'Northeastern University',
             'gpa': 4.0,
-            'end_date': '2027-05-01',
+            # Sep 2025 - Dec 2027, matching PROFILE_SUMMARY and the stored profile.
+            'end_date': '2027-12-15',
             'is_current': True,
         },
         {
@@ -579,6 +614,24 @@ class Config:
     ]
 
     # Skills the candidate can actually claim. Category drives dimension scoring.
+    @classmethod
+    def grad_date(cls):
+        """Expected graduation, derived from EDUCATION — the single source.
+
+        Returns a ``datetime.date`` or ``None``. Used to seed a new profile;
+        once a profile exists, the stored value is authoritative and the UI
+        owns it.
+        """
+        from datetime import date as _date
+
+        for entry in cls.EDUCATION:
+            if entry.get('is_current') and entry.get('end_date'):
+                try:
+                    return _date.fromisoformat(entry['end_date'])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
     PROFILE_SKILLS = [
         ('Python', 'language', 5),
         ('SQL', 'language', 5),
@@ -739,6 +792,22 @@ class Config:
     SCHEDULE_TIMEZONE = os.getenv('SCHEDULE_TIMEZONE', 'America/New_York')
     SCHEDULE_INTERVAL_HOURS = float(os.getenv('SCHEDULE_INTERVAL_HOURS', '3'))
 
+    # Maps a stored `schedule` preference key to the environment variable that
+    # overrides it. See `env_is_set` for the precedence rule.
+    SCHEDULE_ENV_KEYS = {
+        'enabled': 'SCHEDULE_ENABLED',
+        'mode': 'SCHEDULE_MODE',
+        'hour': 'SCHEDULE_HOUR',
+        'minute': 'SCHEDULE_MINUTE',
+        'interval_hours': 'SCHEDULE_INTERVAL_HOURS',
+        'timezone': 'SCHEDULE_TIMEZONE',
+    }
+
+    @staticmethod
+    def env_overrides(name):
+        """True when `name` was explicitly set in the environment."""
+        return env_is_set(name)
+
     # Sources used by the scheduled daily run (NUWorks + LinkedIn excluded)
     DAILY_SOURCES = [
         'github_newgrad', 'ats', 'adzuna', 'jsearch',
@@ -759,7 +828,7 @@ class Config:
     ENABLE_ADZUNA = os.getenv('ENABLE_ADZUNA', 'true').lower() == 'true'
     ENABLE_JSEARCH = os.getenv('ENABLE_JSEARCH', 'true').lower() == 'true'
     ENABLE_LINKEDIN = os.getenv('ENABLE_LINKEDIN', 'false').lower() == 'true'
-    ENABLE_NUWORKS = os.getenv('ENABLE_NUWORKS', 'false').lower() == 'true'
+    # NUWorks uses NUWORKS_ENABLED (defined above) — one switch, not two.
 
     # Per-source metadata. `requires` lists Config attributes that must be
     # non-empty for the source to run; `enable_flag` is the on/off switch.
@@ -810,7 +879,7 @@ class Config:
         },
         'nuworks': {
             'label': 'NUWorks',
-            'kind': 'web', 'enable_flag': 'ENABLE_NUWORKS',
+            'kind': 'web', 'enable_flag': 'NUWORKS_ENABLED',
             'requires': ['NUWORKS_USERNAME', 'NUWORKS_PASSWORD'],
         },
     }

@@ -1,4 +1,14 @@
-"""One-shot scrape: updates profile, scrapes all sources, prints results."""
+"""One-shot scrape from the CLI: scrapes the configured sources, prints results.
+
+This script reads the stored profile; it never writes it. It used to overwrite
+name, email, GitHub, LinkedIn, target role and graduation date with hardcoded
+values on every run, which silently reverted anything edited in the UI and set
+a target role ("Co-op, Internship, New Grad") that contradicts the full-time
+new-grad search this app is for.
+
+The profile is owned by the Profile page and `config/settings.py` seeds it on
+first run. Scraping is a read-only consumer of it.
+"""
 import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -8,23 +18,12 @@ from scrapers.job_scraper_manager import JobScraperManager
 from config.settings import Config
 
 with app.app_context():
-    # Update profile
     profile = UserProfile.query.first()
     if profile:
-        profile.name = 'Vinay Varshigan SJ'
-        profile.email = 'varsvinay911@gmail.com'
-        profile.github_url = 'https://github.com/macrosensor2022'
-        profile.linkedin_url = 'https://www.linkedin.com/in/vinaysj2003/'
-        profile.target_role = (
-            'Data Engineer / Analytics Engineer / BI Engineer '
-            '(SQL Server, SSIS, Azure, Power BI) — Co-op, Internship, New Grad'
-        )
-        from datetime import date
-        profile.grad_date = date(2027, 12, 15)
-        profile.stem_eligible = True
-        profile.unemployment_days = 0
-        db.session.commit()
-        print("Profile updated!")
+        print(f"Scraping for: {profile.name or 'unnamed profile'}"
+              f" — {profile.target_role or 'no target role set'}")
+    else:
+        print("No profile stored yet; using configuration defaults.")
 
     # Run scrapes in sequence
     manager = JobScraperManager(db.session, min_match_score=25)

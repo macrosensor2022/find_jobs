@@ -130,7 +130,19 @@ schema migrations and derived-field backfills run at startup and are idempotent.
 
 ## Configuration
 
-Everything is optional — see `.env.example` for the annotated full list.
+Everything is optional. `.env.example` documents the settings meant for users;
+`config/settings.py` holds the rest (scoring weights, thresholds, tuning).
+
+**Precedence, applied per setting:**
+
+```
+explicit environment variable  >  preference saved in the app  >  code default
+```
+
+A value set in `.env` always wins. Anything left unset stays editable in the UI
+and is stored in the database. (Before this rule existed, the `schedule`
+preference was seeded once on first run and then silently overrode `.env`
+forever, so editing `SCHEDULE_ENABLED` did nothing.)
 
 ### Job age policy
 
@@ -157,7 +169,8 @@ or rediscovery time.
 | LinkedIn | Web | No | **off** (slow) |
 | NUWorks (Northeastern) | Web + Duo 2FA | credentials | **off** |
 
-Toggle any of them with `ENABLE_<SOURCE>=false`. A source that is off, or whose
+Toggle any of them with `ENABLE_<SOURCE>=false` (NUWorks uses the single
+`NUWORKS_ENABLED` switch). A source that is off, or whose
 key is missing, appears on the Scraper and Insights pages as **Disabled** with
 the reason — it never reports a misleading "0 jobs".
 
@@ -190,6 +203,9 @@ rather than launching a competing one.
 python run_scrape.py
 ```
 
+This reads the stored profile and never writes it — scraping cannot change your
+name, email, links, graduation date or target role.
+
 Each run records a `SearchRun` plus one `SourceRun` per source, capturing
 discovered / matched / new / duplicates / rejected / duration / errors. That is
 what the source-health tables read from.
@@ -207,6 +223,9 @@ SCHEDULE_INTERVAL_HOURS=3
 SCHEDULE_HOUR=7            # used when SCHEDULE_MODE=daily
 SCHEDULE_TIMEZONE=America/New_York
 ```
+
+`SCHEDULE_*` set in `.env` overrides whatever is stored; leave a setting out of
+`.env` to manage it from the UI instead.
 
 > **The scheduler only runs while `python run.py` is running.** Close that
 > terminal and nothing is scraped until you start it again. It does not depend
@@ -235,11 +254,27 @@ python -m pytest tests/test_freshness_policy.py -v
 node --check frontend/static/js/app.js
 ```
 
-Tests run against a throwaway SQLite file in your temp directory, never against
-`instance/jobs.db` — importing `backend.app` runs migrations and backfills, so
-the test run is isolated automatically (`config/settings.py::_under_test`).
+The suite is hermetic: it makes no network calls and never touches
+`instance/jobs.db`.
 
-Set `DATABASE_URL` explicitly if you want to point the suite somewhere specific.
+* `config/settings.py::_under_test` redirects `DATABASE_URL` to a throwaway
+  file in your temp directory — importing `backend.app` runs migrations and
+  backfills, so this has to happen before anything imports it.
+* `tests/conftest.py` blocks outbound sockets, so a test that reaches the
+  network fails loudly instead of silently depending on a running server.
+
+Set `DATABASE_URL` explicitly to point the suite somewhere specific.
+
+### Manual platform check
+
+`tests/platform_check.py` exercises a **running** server over real HTTP,
+including two live scrapes that write to that server's database. It is not part
+of the suite and pytest does not collect it — run it deliberately:
+
+```bash
+python run.py                        # in one terminal
+python tests/platform_check.py       # in another; exits non-zero on failure
+```
 
 ---
 
@@ -249,9 +284,16 @@ Set `DATABASE_URL` explicitly if you want to point the suite somewhere specific.
 python scripts/rescore_all.py             # re-score everything with the current engine
 python scripts/rescore_all.py --missing   # only rows missing newer score fields
 python scripts/rescore_all.py --limit 50  # try a small batch first
+python scripts/repair_dedupe_keys.py      # dry run: report stale/colliding dedupe keys
+python scripts/repair_dedupe_keys.py --apply
 python scripts/dedupe_existing.py         # collapse duplicates already stored
 python scripts/inspect_jobs.py            # inspect what is in the database
 ```
+
+`repair_dedupe_keys.py` recomputes `dedupe_key` after the normalization in
+`services/dedupe.py` changes. It backs the database up first, writes only keys
+that do not collide, reports collisions for review, and never merges, deletes
+or hides a job.
 
 ---
 

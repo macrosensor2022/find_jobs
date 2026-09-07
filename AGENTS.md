@@ -36,6 +36,15 @@ These encode bugs that were fixed and must not come back.
    name the missing config *key*, never its value.
 7. **Nothing is fabricated** — jobs, companies, contacts, URLs, posting dates,
    applicant counts, sponsorship claims. Unknown is stored and shown as unknown.
+8. **Scraping never writes the profile.** `run_scrape.py` used to overwrite
+   name/email/links/grad date on every run, reverting UI edits. The profile is
+   owned by the Profile page; `Config.EDUCATION` seeds it on first run only.
+9. **Config precedence is env > stored preference > code default**, per key.
+   `Config.env_overrides(NAME)` is the check; `SCHEDULE_ENV_KEYS` and
+   `_PREFERENCE_ENV_KEYS` map preference keys to their env names.
+10. **One switch per source.** NUWorks is `NUWORKS_ENABLED` everywhere
+    (registry, `init_nuworks`, `/api/nuworks`); `ENABLE_NUWORKS` is an accepted
+    alias that resolves to the same attribute.
 
 ## Architecture (services/)
 
@@ -74,6 +83,14 @@ These encode bugs that were fixed and must not come back.
 - NUWorks JS is dormant (no markup, never initialized) but the backend routes are live — see the comment above `initNUWorks`.
 
 ## Testing conventions
+
+- The suite is hermetic. `tests/conftest.py` blocks outbound sockets and pins
+  `DATABASE_URL` to a temp file. `tests/platform_check.py` is the *manual*
+  live-server check — it is deliberately not named `test_*` and its functions
+  are `check_*`, because pytest collected it before and every check reported
+  green even against a dead port, while two of them scraped into the real DB.
+- API tests use `app.test_client()` against the isolated DB
+  (`tests/test_api_contract.py`), never real HTTP.
 
 - Tests import services with `sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))` so they run under plain `python -m unittest`.
 - `config/settings.py::_under_test` points `DATABASE_URL` at a temp file when a test runner is detected, and `Config.TESTING_MODE` suppresses the startup background tasks. Importing `backend.app` runs migrations and backfills, so **without this the suite rewrites `instance/jobs.db`**. Setting `DATABASE_URL` explicitly always wins.
