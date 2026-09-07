@@ -1,15 +1,67 @@
 import os
+import sys
+import tempfile
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _under_test():
+    """True when this process is a test run.
+
+    Importing ``backend.app`` runs migrations, backfills and a background
+    rescore against whatever ``DATABASE_URL`` resolves to. Without this guard
+    the default is ``instance/jobs.db`` — so simply running the suite would
+    migrate and rewrite the user's real job data. Setting ``DATABASE_URL``
+    explicitly always wins, so this only affects the unset default.
+    """
+    if os.getenv('JOBTRACKER_TEST') == '1':
+        return True
+    if 'PYTEST_CURRENT_TEST' in os.environ:
+        return True
+    # `python -m unittest` / `python -m pytest` leave the runner's package name
+    # on __main__. This is exact where argv[0] is not: on Windows/conda argv[0]
+    # comes through as the literal string "python.exe -m unittest".
+    main = sys.modules.get('__main__')
+    if getattr(main, '__package__', None) in ('unittest', 'pytest', '_pytest'):
+        return True
+
+    entry = (sys.argv[0] or '').replace('\\', '/').lower()
+    if os.path.basename(entry) in ('pytest', 'py.test', 'pytest.exe'):
+        return True
+    return any(
+        token in entry for token in ('unittest', 'pytest', 'py.test', 'nose')
+    )
+
+
+UNDER_TEST = _under_test()
+_DEFAULT_DB = (
+    f"sqlite:///{os.path.join(tempfile.gettempdir(), 'jobtracker_test.db')}"
+    if UNDER_TEST else 'sqlite:///jobs.db'
+)
+
+
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///jobs.db')
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', _DEFAULT_DB)
+    TESTING_MODE = UNDER_TEST
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    # Allow background scrape thread to share the SQLite connection safely
+    # SQLite under a background scrape + a live UI.
+    #
+    # `timeout` makes a writer wait for the lock instead of raising
+    # "database is locked" immediately, which is what used to abort a long
+    # rescore mid-run. `pool_pre_ping` drops connections a crashed thread left
+    # behind, and `check_same_thread` lets the scrape thread use the pool.
+    # WAL journal mode (set per-connection in backend/app.py) lets the UI keep
+    # reading while the scrape writes.
+    SQLITE_BUSY_TIMEOUT_SECONDS = float(os.getenv('SQLITE_BUSY_TIMEOUT_SECONDS', '30'))
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'connect_args': {'check_same_thread': False},
+        'connect_args': {
+            'check_same_thread': False,
+            'timeout': SQLITE_BUSY_TIMEOUT_SECONDS,
+        },
+        'pool_pre_ping': True,
     }
     PORT = int(os.getenv('PORT', 8080))
     
@@ -651,9 +703,25 @@ class Config:
         (336, 'old'),       # 7-14 days
         (None, 'stale'),    # 14+ days
     ]
-    JOB_EXPIRY_DAYS = int(os.getenv('JOB_EXPIRY_DAYS', '30'))
+    # ---- Job age policy -------------------------------------------------------
+    # One consistent policy, measured against the *source posting date*
+    # (`date_posted`) — never against scrape/rediscovery time. Jobs with an
+    # unknown posting date are never auto-expired; they are labelled 'unknown'.
+    #
+    #   MAX_JOB_AGE_DAYS   — beyond this a stored posting is treated as expired
+    #   TODAY_MAX_AGE_DAYS — Today only recommends postings younger than this
+    #   WATCH_MAX_AGE_DAYS — still worth watching, but not a Today headline
+    #   SCRAPE_MAX_AGE_DAYS — sources drop listings older than this at ingest
+    MAX_JOB_AGE_DAYS = int(os.getenv('MAX_JOB_AGE_DAYS', '30'))
+    TODAY_MAX_AGE_DAYS = int(os.getenv('TODAY_MAX_AGE_DAYS', '14'))
+    WATCH_MAX_AGE_DAYS = int(os.getenv('WATCH_MAX_AGE_DAYS', '21'))
+    SCRAPE_MAX_AGE_DAYS = int(os.getenv('SCRAPE_MAX_AGE_DAYS', '14'))
+
+    # Kept as the historical name for MAX_JOB_AGE_DAYS so existing callers and
+    # stored preferences keep working. Both always agree.
+    JOB_EXPIRY_DAYS = MAX_JOB_AGE_DAYS
     VERIFY_STALE_AFTER_HOURS = int(os.getenv('VERIFY_STALE_AFTER_HOURS', '48'))
-    VERIFY_TOP_N = int(os.getenv('VERIFY_TOP_N', '15'))
+    VERIFY_TOP_N = int(os.getenv('VERIFY_TOP_N', '25'))
 
     # ---- Daily briefing ------------------------------------------------------
     DAILY_TOP_N = int(os.getenv('DAILY_TOP_N', '10'))
@@ -676,6 +744,89 @@ class Config:
         'github_newgrad', 'ats', 'adzuna', 'jsearch',
         'remoteok', 'themuse', 'remotive', 'arbeitnow',
     ]
+
+    # ---- Source enablement ---------------------------------------------------
+    # Explicit on/off switches. A source that is switched off, or that is
+    # missing its credentials, is reported as DISABLED with a reason — it is
+    # never reported as "succeeded with 0 jobs".
+    ENABLE_GITHUB_NEWGRAD = os.getenv('ENABLE_GITHUB_NEWGRAD', 'true').lower() == 'true'
+    ENABLE_GITHUB_INTERN = os.getenv('ENABLE_GITHUB_INTERN', 'false').lower() == 'true'
+    ENABLE_ATS = os.getenv('ENABLE_ATS', 'true').lower() == 'true'
+    ENABLE_REMOTEOK = os.getenv('ENABLE_REMOTEOK', 'true').lower() == 'true'
+    ENABLE_THEMUSE = os.getenv('ENABLE_THEMUSE', 'true').lower() == 'true'
+    ENABLE_REMOTIVE = os.getenv('ENABLE_REMOTIVE', 'true').lower() == 'true'
+    ENABLE_ARBEITNOW = os.getenv('ENABLE_ARBEITNOW', 'true').lower() == 'true'
+    ENABLE_ADZUNA = os.getenv('ENABLE_ADZUNA', 'true').lower() == 'true'
+    ENABLE_JSEARCH = os.getenv('ENABLE_JSEARCH', 'true').lower() == 'true'
+    ENABLE_LINKEDIN = os.getenv('ENABLE_LINKEDIN', 'false').lower() == 'true'
+    ENABLE_NUWORKS = os.getenv('ENABLE_NUWORKS', 'false').lower() == 'true'
+
+    # Per-source metadata. `requires` lists Config attributes that must be
+    # non-empty for the source to run; `enable_flag` is the on/off switch.
+    SOURCE_REGISTRY = {
+        'github_newgrad': {
+            'label': 'GitHub New Grad',
+            'kind': 'feed', 'enable_flag': 'ENABLE_GITHUB_NEWGRAD', 'requires': [],
+        },
+        'github_intern': {
+            'label': 'GitHub Internships',
+            'kind': 'feed', 'enable_flag': 'ENABLE_GITHUB_INTERN', 'requires': [],
+        },
+        'ats': {
+            'label': 'Company ATS (Greenhouse / Lever / Ashby)',
+            'kind': 'api', 'enable_flag': 'ENABLE_ATS', 'requires': [],
+        },
+        'remoteok': {
+            'label': 'RemoteOK',
+            'kind': 'api', 'enable_flag': 'ENABLE_REMOTEOK', 'requires': [],
+        },
+        'themuse': {
+            'label': 'The Muse',
+            'kind': 'api', 'enable_flag': 'ENABLE_THEMUSE', 'requires': [],
+        },
+        'remotive': {
+            'label': 'Remotive',
+            'kind': 'api', 'enable_flag': 'ENABLE_REMOTIVE', 'requires': [],
+        },
+        'arbeitnow': {
+            'label': 'Arbeitnow',
+            'kind': 'api', 'enable_flag': 'ENABLE_ARBEITNOW', 'requires': [],
+        },
+        'adzuna': {
+            'label': 'Adzuna',
+            'kind': 'api', 'enable_flag': 'ENABLE_ADZUNA',
+            'requires': ['ADZUNA_APP_ID', 'ADZUNA_APP_KEY'],
+            'signup_url': 'https://developer.adzuna.com/',
+        },
+        'jsearch': {
+            'label': 'JSearch (RapidAPI)',
+            'kind': 'api', 'enable_flag': 'ENABLE_JSEARCH',
+            'requires': ['JSEARCH_API_KEY'],
+            'signup_url': 'https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch',
+        },
+        'linkedin': {
+            'label': 'LinkedIn',
+            'kind': 'web', 'enable_flag': 'ENABLE_LINKEDIN', 'requires': [],
+        },
+        'nuworks': {
+            'label': 'NUWorks',
+            'kind': 'web', 'enable_flag': 'ENABLE_NUWORKS',
+            'requires': ['NUWORKS_USERNAME', 'NUWORKS_PASSWORD'],
+        },
+    }
+
+    # Sources that ignore the keyword argument and always return one full feed,
+    # using the keyword only to filter the response afterwards. The manager
+    # fetches these ONCE per run and filters locally instead of re-downloading
+    # the same payload for every keyword.
+    #
+    # Remotive is deliberately NOT here: it passes the keyword to the API as a
+    # server-side `search` param, so one keyword-less call returns a genuinely
+    # narrower result set rather than the same data.
+    FULL_FEED_SOURCES = ['remoteok', 'arbeitnow', 'themuse']
+
+    # Wall-clock budget per source, so one slow board cannot stall a whole run.
+    SOURCE_TIME_BUDGET_SECONDS = int(os.getenv('SOURCE_TIME_BUDGET_SECONDS', '180'))
 
     # ---- Follow-ups ---------------------------------------------------------
     FOLLOWUP_DAYS = [int(d) for d in os.getenv('FOLLOWUP_DAYS', '7,14').split(',') if d.strip()]

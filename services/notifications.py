@@ -70,14 +70,21 @@ def generate_notifications(db, Job, Application, Notification, WatchlistCompany)
             dedupe_key=f'sponsorship:{job.id}', severity='high', job_id=job.id,
         )
 
+    # Freshness comes from the posting date against *now*, not from the stored
+    # bucket, which is only accurate as of the last refresh. The message states
+    # the posting date rather than saying "today" — a notification is read days
+    # after it is written, and "Posted today" dated last week is a lie the
+    # stored text cannot take back.
+    day_ago = now - timedelta(hours=24)
     for job in base.filter(
-        Job.freshness_bucket == 'hot',
+        Job.date_posted >= day_ago,
         Job.candidate_match_score >= Config.STRONG_MATCH_MIN,
     ).order_by(Job.final_score.desc()).limit(15).all():
         created += _add(
             db, Notification, 'fresh_job',
-            f'Posted today: {job.title}',
-            f'{job.company} — {job.candidate_match_score}% match',
+            f'Fresh posting: {job.title}',
+            f'{job.company} — posted {job.date_posted.date().isoformat()}, '
+            f'{job.candidate_match_score}% match',
             dedupe_key=f'fresh:{job.id}:{now.date().isoformat()}',
             job_id=job.id,
         )

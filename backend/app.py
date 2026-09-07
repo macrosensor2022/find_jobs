@@ -3,8 +3,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 from datetime import date, datetime, timedelta, timezone
+from backend import scrape_state
 from backend.models import (
     db, Job, SearchLog, UserProfile, EVerifyEmployer, SponsorHistory,
     MetroOpportunity, MetroSocLca, UnparsedLocation,
@@ -15,8 +17,12 @@ from backend.models import (
 from config.settings import Config
 import json
 import logging
+import sqlite3
 import threading
 import copy
+
+from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy.engine import Engine
 
 # Expected graduation from the candidate profile (MS CS, Northeastern).
 _GRAD_DATE = date(2027, 5, 1)
@@ -25,18 +31,22 @@ _GRAD_DATE = date(2027, 5, 1)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Background scrape state (single-job queue)
-_scrape_lock = threading.Lock()
-_scrape_state = {
-    'status': 'idle',  # idle | running | completed | failed
-    'message': '',
-    'started_at': None,
-    'completed_at': None,
-    'progress': {},
-    'results': None,
-    'error': None,
-    'params': None,
-}
+def run_post_scrape_verification():
+    """Check apply links for the jobs the user is about to see.
+
+    Returns a compact summary; per-job details stay out of the scrape status
+    payload so polling stays cheap.
+    """
+    from services.batch_verify import verify_top_jobs
+
+    summary = verify_top_jobs(
+        Job, session=db.session, limit=int(getattr(Config, 'VERIFY_TOP_N', 25)),
+    )
+    return {
+        k: summary.get(k)
+        for k in ('checked', 'verified', 'dead', 'blocked',
+                  'redirected', 'unreachable', 'unknown')
+    }
 
 
 def _run_scrape_job(sources, keywords, locations, min_match_score):
@@ -45,66 +55,32 @@ def _run_scrape_job(sources, keywords, locations, min_match_score):
         try:
             from scrapers.job_scraper_manager import JobScraperManager
 
-            def on_progress(info):
-                with _scrape_lock:
-                    progress = dict(_scrape_state.get('progress') or {})
-                    progress.update(info or {})
-                    _scrape_state['progress'] = progress
-                    if info and info.get('message'):
-                        _scrape_state['message'] = info['message']
-                    # Expose live totals while still running
-                    if info and info.get('partial_results'):
-                        _scrape_state['results'] = copy.deepcopy(info['partial_results'])
-
             manager = JobScraperManager(
                 db.session,
                 min_match_score=min_match_score,
-                progress_callback=on_progress,
+                progress_callback=scrape_state.update_progress,
             )
             results = manager.scrape_all(
                 sources=sources, keywords=keywords, locations=locations,
             )
             try:
-                from services.batch_verify import verify_top_jobs
-                results['verify'] = verify_top_jobs(
-                    Job, session=db.session,
-                    limit=int(getattr(Config, 'VERIFY_TOP_N', 15)),
-                )
-                # Don't dump per-job details into scrape status payload
-                if isinstance(results.get('verify'), dict):
-                    results['verify'] = {
-                        k: results['verify'].get(k)
-                        for k in ('checked', 'verified', 'dead', 'unreachable', 'unknown')
-                    }
+                results['verify'] = run_post_scrape_verification()
             except Exception:
                 logger.exception('Post-scrape URL verification failed')
 
-            with _scrape_lock:
-                _scrape_state['status'] = 'completed'
-                _scrape_state['results'] = results
-                _scrape_state['completed_at'] = datetime.now(timezone.utc).isoformat()
-                verify_bits = results.get('verify') or {}
-                verified_n = verify_bits.get('verified', 0)
-                _scrape_state['message'] = (
+            verified_n = (results.get('verify') or {}).get('verified', 0)
+            scrape_state.finish(
+                results,
+                message=(
                     f"Done — {results.get('total_new_jobs', 0)} new jobs "
                     f"({results.get('total_matched_jobs', 0)} matched); "
                     f"{verified_n} apply links verified"
-                )
-                _scrape_state['progress'] = {
-                    **(_scrape_state.get('progress') or {}),
-                    'current_source': None,
-                    'sources_done': list((results.get('sources') or {}).keys()),
-                    'sources_total': len(sources),
-                    'total_new_jobs': results.get('total_new_jobs', 0),
-                    'total_matched_jobs': results.get('total_matched_jobs', 0),
-                }
+                ),
+                sources_total=len(sources),
+            )
         except Exception as e:
             logger.exception('Background scrape failed')
-            with _scrape_lock:
-                _scrape_state['status'] = 'failed'
-                _scrape_state['error'] = str(e)
-                _scrape_state['completed_at'] = datetime.now(timezone.utc).isoformat()
-                _scrape_state['message'] = f'Scrape failed: {e}'
+            scrape_state.fail(e)
             try:
                 db.session.rollback()
             except Exception:
@@ -139,9 +115,11 @@ def validate_job_data(data: dict, partial: bool = False) -> tuple:
         return False, "Job URL too long (max 500 characters)"
     
     # Validate application_status if provided
-    valid_statuses = ['not_applied', 'applied', 'interviewing', 'offer', 'rejected', 'withdrawn']
-    if data.get('application_status') and data['application_status'] not in valid_statuses:
-        return False, f"Invalid application_status. Must be one of: {', '.join(valid_statuses)}"
+    from services.application_sync import JOB_STATUSES
+    if data.get('application_status') and data['application_status'] not in JOB_STATUSES:
+        return False, (
+            f"Invalid application_status. Must be one of: {', '.join(JOB_STATUSES)}"
+        )
     
     return True, None
 
@@ -215,6 +193,7 @@ def _migrate_add_columns(engine):
             'application_url_status':     "VARCHAR(20) DEFAULT 'unknown'",
             'application_url_checked_at': 'DATETIME',
             'date_posted_origin':         'VARCHAR(20)',
+            'source_updated_at':          'DATETIME',
             'last_verified_at':           'DATETIME',
             'verification_status':        "VARCHAR(20) DEFAULT 'unverified'",
             'is_expired':                 'BOOLEAN DEFAULT 0',
@@ -283,6 +262,22 @@ def _migrate_add_columns(engine):
             'stem_eligible':     'BOOLEAN DEFAULT 1',
             'unemployment_days': 'INTEGER DEFAULT 0',
         }),
+        # Source-health reporting: accepted vs new vs rejected, plus why a
+        # source produced nothing.
+        (SourceRun.__tablename__, {
+            'jobs_matched':       'INTEGER DEFAULT 0',
+            'jobs_rejected':      'INTEGER DEFAULT 0',
+            'rejected_breakdown': 'TEXT',
+            'duration_seconds':   'FLOAT',
+            'message':            'TEXT',
+        }),
+        (SearchRun.__tablename__, {
+            'jobs_matched':      'INTEGER DEFAULT 0',
+            'jobs_rejected':     'INTEGER DEFAULT 0',
+            'jobs_stale':        'INTEGER DEFAULT 0',
+            'sources_disabled':  'INTEGER DEFAULT 0',
+            'sources_failed':    'INTEGER DEFAULT 0',
+        }),
     ]
 
     with engine.connect() as conn:
@@ -310,6 +305,17 @@ def _migrate_add_columns(engine):
         ('idx_job_sponsorship', Job.__tablename__, 'sponsorship_status'),
         ('idx_job_eligibility', Job.__tablename__,
          'location_blocked, role_blocked, is_expired'),
+        # Freshness and discovery are now first-class query dimensions: Today
+        # filters on posting age, "new since yesterday" filters on first_seen.
+        ('idx_job_first_seen', Job.__tablename__, 'first_seen'),
+        ('idx_job_last_seen', Job.__tablename__, 'last_seen'),
+        ('idx_job_freshness_bucket', Job.__tablename__, 'freshness_bucket'),
+        ('idx_job_priority', Job.__tablename__, 'application_priority_score'),
+        ('idx_job_recommendation', Job.__tablename__, 'application_recommendation'),
+        ('idx_job_golden', Job.__tablename__, 'golden_opportunity_score'),
+        ('idx_job_industry', Job.__tablename__, 'industry'),
+        ('idx_job_today', Job.__tablename__,
+         'is_hidden, is_applied, role_tier, date_posted'),
     ]
     with engine.connect() as conn:
         for index_name, table_name, column in late_indexes:
@@ -440,67 +446,57 @@ def _seed_profile_data():
         logger.info('Seeded profile data: %s', ', '.join(seeded))
 
 
-def _rescore_unscored_jobs(flask_app, limit=400):
-    """Fill final_score on older rows so the Today view is not empty.
+def _rescore_stale_jobs(flask_app, limit=600):
+    """Bring rows scored by an older engine up to the current field set.
 
-    Runs in a background thread so startup stays fast. Never invents jobs;
-    it only re-scores listings already stored.
+    Targets any job missing a field today's engine produces — not just
+    ``final_score IS NULL``. That narrower condition is why most of the table
+    ended up with a final score but no recommendation, industry or golden
+    score: those columns were added later and nothing ever backfilled them.
+
+    Runs in a background thread so startup stays fast, and only re-scores
+    listings that are already stored. It never creates a job.
     """
+    if (getattr(Config, 'TESTING_MODE', False)
+            or os.getenv('JOBTRACKER_DISABLE_STARTUP_TASKS') == '1'):
+        return
+
     def _run():
         with flask_app.app_context():
-            from services.dedupe import build_dedupe_key
-            from services.freshness import is_expired as freshness_is_expired
-            from services.ranking import apply_to_model, score_job
+            from sqlalchemy import or_
+            from services.rescore import rescore_jobs
 
             jobs = (
-                Job.query.filter(Job.final_score.is_(None))
+                Job.query.filter(
+                    or_(
+                        Job.final_score.is_(None),
+                        Job.application_recommendation.is_(None),
+                        Job.application_priority_score.is_(None),
+                        Job.golden_opportunity_score.is_(None),
+                        Job.industry.is_(None),
+                    )
+                )
                 .order_by(Job.id.desc())
                 .limit(limit)
                 .all()
             )
             if not jobs:
                 return
-            logger.info('Rescoring %s jobs with no final_score', len(jobs))
-            watchlist = [
-                {'name': r.name, 'priority': r.priority}
-                for r in WatchlistCompany.query.filter_by(is_active=True).all()
-            ] or [{'name': n, 'priority': 2} for n in Config.WATCHLIST_COMPANIES]
-            loc_prefs = None
-            row = Preference.query.filter_by(key='location_preferences').first()
-            if row and isinstance(row.parsed, dict):
-                loc_prefs = row.parsed
-            scored = 0
-            for job in jobs:
-                try:
-                    job.is_expired = freshness_is_expired(job.date_posted)
-                    job.dedupe_key = job.dedupe_key or build_dedupe_key(job)
-                    result = score_job({
-                        'title': job.title,
-                        'company': job.company,
-                        'location': job.location,
-                        'description': job.description,
-                        'source': job.source,
-                        'date_posted': job.date_posted,
-                        'is_remote': job.is_remote,
-                        'worksite_state': job.worksite_state,
-                        'application_url': job.application_url or job.job_url,
-                        'application_url_status': job.application_url_status,
-                        'verification_status': job.verification_status,
-                        'is_expired': job.is_expired,
-                        'duplicate_of_id': job.duplicate_of_id,
-                    }, watchlist=watchlist, location_prefs=loc_prefs)
-                    apply_to_model(job, result)
-                    if result['match']['eligible'] and job.is_hidden and not job.is_applied:
-                        job.is_hidden = False
-                    elif not result['match']['eligible']:
-                        job.is_hidden = True
-                    scored += 1
-                except Exception:
-                    logger.exception('Rescore failed for job %s', job.id)
-            db.session.commit()
-            logger.info('Rescored %s previously un-scored jobs', scored)
+            logger.info('RESCORE START — %s jobs missing current score fields', len(jobs))
+            try:
+                rescore_jobs(
+                    db.session,
+                    {'Job': Job, 'WatchlistCompany': WatchlistCompany,
+                     'Preference': Preference},
+                    jobs,
+                )
+            except Exception:
+                logger.exception('Background rescore failed')
+                db.session.rollback()
+            finally:
+                db.session.remove()
 
-    threading.Thread(target=_run, daemon=True, name='rescore-unscored').start()
+    threading.Thread(target=_run, daemon=True, name='rescore-stale').start()
 
 
 app = Flask(__name__, 
@@ -510,6 +506,32 @@ app = Flask(__name__,
 app.config.from_object(Config)
 CORS(app)
 db.init_app(app)
+
+
+@sqlalchemy_event.listens_for(Engine, 'connect')
+def _sqlite_pragmas(dbapi_connection, connection_record):
+    """WAL + a real busy timeout on every SQLite connection.
+
+    The default rollback journal takes an exclusive lock for the whole write,
+    so a long scrape blocks every UI read and readers can abort the writer.
+    WAL lets readers continue while one writer works, which is exactly the
+    background-scrape-plus-live-dashboard shape this app has.
+    """
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA synchronous=NORMAL')
+        cursor.execute(
+            'PRAGMA busy_timeout=%d'
+            % int(getattr(Config, 'SQLITE_BUSY_TIMEOUT_SECONDS', 30) * 1000)
+        )
+        cursor.execute('PRAGMA foreign_keys=ON')
+    except Exception:
+        logger.debug('Could not apply SQLite pragmas', exc_info=True)
+    finally:
+        cursor.close()
 
 with app.app_context():
     from datetime import date as _date
@@ -547,9 +569,75 @@ with app.app_context():
 
     _seed_profile_data()
 
-_rescore_unscored_jobs(app)
+    # Discovery timestamps and freshness are derived values, so they are
+    # rebuilt on every start rather than trusted from whenever they were last
+    # written. Both are cheap set-based updates.
+    if not (getattr(Config, 'TESTING_MODE', False)
+            or os.getenv('JOBTRACKER_DISABLE_STARTUP_TASKS') == '1'):
+        try:
+            from services.application_sync import reconcile_all
+            from services.maintenance import backfill_seen_timestamps, refresh_freshness
+            backfill_seen_timestamps(db.session)
+            refresh_freshness(db.session)
+            # Repair any job/application state that diverged before the sync
+            # existed. Applications win; nothing the user recorded is dropped.
+            reconcile_all(db.session, Job, Application)
+        except Exception:
+            logger.exception('Startup maintenance failed')
+            db.session.rollback()
+
+_rescore_stale_jobs(app)
 
 # The scheduler is started from run.py so the reloader cannot double-start it.
+
+
+MAX_PAGE_SIZE = int(os.getenv('MAX_PAGE_SIZE', '200'))
+
+
+def _wants_json():
+    return request.path.startswith('/api/')
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    """API errors answer in JSON, so the frontend can show a real message.
+
+    Flask's defaults return an HTML page, which the fetch layer could only
+    surface as "Unexpected token '<'".
+    """
+    if not _wants_json():
+        return error
+    payload = {'error': error.description, 'status': error.code}
+    if error.code == 404:
+        payload['error'] = 'Not found'
+    elif error.code == 400 and 'Failed to decode JSON' in (error.description or ''):
+        payload['error'] = 'The request body was not valid JSON.'
+    elif error.code == 405:
+        payload['error'] = f'{request.method} is not allowed on this endpoint.'
+    return jsonify(payload), error.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    """Last resort: log the detail, return something safe.
+
+    The traceback goes to the server log. The response carries no stack, no
+    SQL and no filesystem path — those belong in the log, not in a browser.
+    """
+    if isinstance(error, HTTPException):
+        return handle_http_error(error)
+    logger.exception('Unhandled error on %s %s', request.method, request.path)
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    if not _wants_json():
+        return 'Internal server error', 500
+    return jsonify({
+        'error': 'Something went wrong on our side. '
+                 'The details were written to the server log.',
+        'status': 500,
+    }), 500
 
 
 @app.route('/')
@@ -564,9 +652,14 @@ def favicon():
 
 @app.route('/api/jobs', methods=['GET'])
 def get_jobs():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    
+    # Clamped, not trusted. `per_page=99999` used to serialize the whole table
+    # into one 2 MB response; `type=int` also yields None for junk like
+    # `page=abc`, which would blow up in paginate().
+    page = max(1, request.args.get('page', 1, type=int) or 1)
+    per_page = min(
+        MAX_PAGE_SIZE, max(1, request.args.get('per_page', 20, type=int) or 20)
+    )
+
     source = request.args.get('source')
     location = request.args.get('location')
     status = request.args.get('status')
@@ -772,7 +865,9 @@ def get_jobs():
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     return jsonify({
-        'jobs': [job.to_dict() for job in pagination.items],
+        # summary=True trims descriptions; the detail modal re-fetches
+        # the single job, which carries the full text.
+        'jobs': [job.to_dict(summary=True) for job in pagination.items],
         'total': pagination.total,
         'pages': pagination.pages,
         'current_page': page,
@@ -803,10 +898,18 @@ def update_job(job_id):
     if 'is_hidden' in data:
         job.is_hidden = data['is_hidden']
     if 'application_status' in data:
-        job.application_status = data['application_status']
-        if data['application_status'] == 'applied' and not job.applied_date:
-            job.applied_date = datetime.now(timezone.utc)
-            job.is_applied = True
+        # Application is the canonical record. Routing the change through the
+        # sync creates or moves it, then re-derives the job's coarse status —
+        # so a job can no longer read "applied" with nothing in the tracker.
+        from services.application_sync import sync_application_from_job
+        application = sync_application_from_job(
+            job, Application, db.session, status=data['application_status'],
+        )
+        # Marking a job applied from the Jobs page must set up the follow-up
+        # cadence too, or the reminder silently never appears.
+        if application is not None and application.date_applied and not \
+                application.next_followup_date:
+            _schedule_followup(application)
     if 'notes' in data:
         job.notes = data['notes']
     if 'is_not_interested' in data:
@@ -846,10 +949,23 @@ def get_briefing():
 def get_source_metrics():
     from services.briefing import source_metrics
 
+    from services.source_health import configured_sources
+
     days = request.args.get('days', 30, type=int)
+    sources = source_metrics({'SourceRun': SourceRun, 'Job': Job}, days=days)
     return jsonify({
         'days': days,
-        'sources': source_metrics({'SourceRun': SourceRun, 'Job': Job}, days=days),
+        'sources': sources,
+        # Enablement snapshot — which sources can run at all, and why not.
+        # Reports credential *names*, never values.
+        'configuration': configured_sources(),
+        'summary': {
+            'total': len(sources),
+            'healthy': sum(1 for s in sources if s['health_state'] == 'healthy'),
+            'failing': sum(1 for s in sources if s['health_state'] == 'failing'),
+            'disabled': sum(1 for s in sources if s['health_state'] == 'disabled'),
+            'warning': sum(1 for s in sources if s['health_state'] == 'warning'),
+        },
     })
 
 
@@ -1045,10 +1161,11 @@ def create_application():
     db.session.flush()
     _log_application_event(application, 'created', to_status=status)
     if status == 'APPLIED':
-        job.is_applied = True
-        job.applied_date = application.date_applied
-        job.application_status = 'applied'
         _schedule_followup(application)
+    # Derive the job's coarse status from the canonical application state, for
+    # every status — not only APPLIED.
+    from services.application_sync import sync_job_from_application
+    sync_job_from_application(application, job)
     db.session.commit()
     return jsonify(application.to_dict()), 201
 
@@ -1073,13 +1190,13 @@ def update_application(application_id):
                 application.date_applied = datetime.now(timezone.utc)
                 application.followup_count = 0
                 _schedule_followup(application)
-                if application.job:
-                    application.job.is_applied = True
-                    application.job.applied_date = application.date_applied
-                    application.job.application_status = 'applied'
             if new_status in ('REJECTED', 'WITHDRAWN', 'OFFER', 'EXPIRED'):
                 application.next_followup_date = None
                 application.outcome = new_status.lower()
+            # Every status change re-derives the job row, so a job cannot sit
+            # at "applied" while its application has moved to INTERVIEW.
+            from services.application_sync import sync_job_from_application
+            sync_job_from_application(application)
 
     for field in ('resume_version', 'cover_letter', 'recruiter_name',
                   'recruiter_email', 'notes', 'application_url'):
@@ -1099,13 +1216,42 @@ def update_application(application_id):
 
 @app.route('/api/applications/<int:application_id>/followup', methods=['POST'])
 def log_followup(application_id):
+    """Record a follow-up outcome: done, snoozed, or cancelled.
+
+    Nothing is sent anywhere — this only tracks what the user did.
+    """
     application = db.get_or_404(Application, application_id)
-    application.followup_count = (application.followup_count or 0) + 1
-    _log_application_event(
-        application, 'followup',
-        detail=(request.get_json() or {}).get('note'),
-    )
-    _schedule_followup(application)
+    data = request.get_json() or {}
+    action = (data.get('action') or 'done').lower()
+
+    if action == 'cancelled':
+        application.next_followup_date = None
+        _log_application_event(application, 'followup_cancelled',
+                               detail=data.get('note'))
+    elif action == 'snoozed':
+        try:
+            days = int(data.get('days', 3))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'days must be a whole number'}), 400
+        if not 1 <= days <= 90:
+            return jsonify({'error': 'days must be between 1 and 90'}), 400
+        base = application.next_followup_date or datetime.now(timezone.utc)
+        if base.tzinfo is None:
+            base = base.replace(tzinfo=timezone.utc)
+        application.next_followup_date = max(
+            base, datetime.now(timezone.utc)
+        ) + timedelta(days=days)
+        _log_application_event(application, 'followup_snoozed',
+                               detail=f'{days} days')
+    elif action == 'done':
+        application.followup_count = (application.followup_count or 0) + 1
+        _log_application_event(application, 'followup', detail=data.get('note'))
+        _schedule_followup(application)
+    else:
+        return jsonify({
+            'error': f'Unknown action: {action}. Use done, snoozed or cancelled.'
+        }), 400
+
     db.session.commit()
     return jsonify(application.to_dict())
 
@@ -1123,24 +1269,40 @@ def application_events(application_id):
 @app.route('/api/followups', methods=['GET'])
 def get_followups():
     now = datetime.now(timezone.utc)
-    due = (
-        Application.query.filter(
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    closed = ['REJECTED', 'WITHDRAWN', 'OFFER', 'EXPIRED']
+
+    def _pending():
+        return Application.query.filter(
             Application.next_followup_date.isnot(None),
-            Application.next_followup_date <= now,
-            Application.status.notin_(['REJECTED', 'WITHDRAWN', 'OFFER', 'EXPIRED']),
+            Application.status.notin_(closed),
         )
-        .order_by(Application.next_followup_date.asc()).all()
-    )
-    upcoming = (
-        Application.query.filter(
-            Application.next_followup_date > now,
-            Application.status.notin_(['REJECTED', 'WITHDRAWN', 'OFFER', 'EXPIRED']),
-        )
-        .order_by(Application.next_followup_date.asc()).limit(20).all()
-    )
+
+    # Overdue is separated from due-today so a follow-up that slipped a week
+    # does not sit quietly in the same bucket as one that came up this morning.
+    overdue = _pending().filter(
+        Application.next_followup_date < day_start
+    ).order_by(Application.next_followup_date.asc()).all()
+    due_today = _pending().filter(
+        Application.next_followup_date >= day_start,
+        Application.next_followup_date < day_end,
+    ).order_by(Application.next_followup_date.asc()).all()
+    upcoming = _pending().filter(
+        Application.next_followup_date >= day_end
+    ).order_by(Application.next_followup_date.asc()).limit(20).all()
+
     return jsonify({
-        'due': [a.to_dict() for a in due],
+        'overdue': [a.to_dict() for a in overdue],
+        'due_today': [a.to_dict() for a in due_today],
+        # Everything actionable now, for callers that do not split the two.
+        'due': [a.to_dict() for a in overdue + due_today],
         'upcoming': [a.to_dict() for a in upcoming],
+        'counts': {
+            'overdue': len(overdue),
+            'due_today': len(due_today),
+            'upcoming': len(upcoming),
+        },
     })
 
 
@@ -1762,35 +1924,27 @@ def start_scrape():
                 'results': {'sources': {}, 'total_new_jobs': 0, 'total_matched_jobs': 0},
             }), 500
 
-    with _scrape_lock:
-        if _scrape_state['status'] == 'running':
-            return jsonify({
-                'message': 'A scrape is already running',
-                'status': 'running',
-                'progress': dict(_scrape_state.get('progress') or {}),
-            }), 409
-
-        _scrape_state.update({
-            'status': 'running',
-            'message': 'Starting scrape…',
-            'started_at': datetime.now(timezone.utc).isoformat(),
-            'completed_at': None,
-            'progress': {
-                'current_source': None,
-                'sources_done': [],
-                'sources_total': len(sources),
-                'total_new_jobs': 0,
-                'total_matched_jobs': 0,
-            },
-            'results': None,
-            'error': None,
-            'params': {
+    try:
+        scrape_state.begin(
+            trigger='manual',
+            sources=sources,
+            params={
                 'sources': sources,
                 'keywords': keywords,
                 'locations': locations,
                 'min_match_score': min_match_score,
             },
-        })
+        )
+    except scrape_state.ScrapeInProgress as busy:
+        # Both the button and the scheduler claim the same slot, so this also
+        # covers "a scheduled run started 10 seconds ago".
+        return jsonify({
+            'message': 'A scrape is already running',
+            'status': 'running',
+            'trigger': busy.state.get('trigger'),
+            'started_at': busy.state.get('started_at'),
+            'progress': busy.state.get('progress') or {},
+        }), 409
 
     thread = threading.Thread(
         target=_run_scrape_job,
@@ -1809,18 +1963,8 @@ def start_scrape():
 
 @app.route('/api/scrape/status', methods=['GET'])
 def scrape_status():
-    """Poll background scrape progress."""
-    with _scrape_lock:
-        payload = {
-            'status': _scrape_state['status'],
-            'message': _scrape_state['message'],
-            'started_at': _scrape_state['started_at'],
-            'completed_at': _scrape_state['completed_at'],
-            'progress': dict(_scrape_state.get('progress') or {}),
-            'error': _scrape_state.get('error'),
-            'results': _scrape_state.get('results'),
-        }
-    return jsonify(payload)
+    """Poll background scrape progress (manual runs and scheduled runs alike)."""
+    return jsonify(scrape_state.snapshot())
 
 
 @app.route('/api/schedule', methods=['GET'])
@@ -1832,12 +1976,16 @@ def get_schedule():
     return jsonify({
         'settings': settings or {
             'enabled': Config.SCHEDULE_ENABLED,
+            'mode': Config.SCHEDULE_MODE,
             'hour': Config.SCHEDULE_HOUR,
             'minute': Config.SCHEDULE_MINUTE,
+            'interval_hours': Config.SCHEDULE_INTERVAL_HOURS,
             'timezone': Config.SCHEDULE_TIMEZONE,
             'sources': Config.DAILY_SOURCES,
         },
         'next_run': scheduler_module.next_run_time(),
+        # Whether it is actually up, when it last ran, and whether that failed.
+        'status': scheduler_module.status(),
     })
 
 
@@ -2099,4 +2247,8 @@ def nuworks_close():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=Config.PORT)
+    # Debug mode exposes the Werkzeug console — an arbitrary-code-execution
+    # endpoint for anyone who can reach the port, and this binds 0.0.0.0. It is
+    # opt-in via FLASK_DEBUG=1, never the default. `python run.py` is the
+    # supported entrypoint and always runs with it off.
+    app.run(debug=os.getenv('FLASK_DEBUG') == '1', port=Config.PORT)

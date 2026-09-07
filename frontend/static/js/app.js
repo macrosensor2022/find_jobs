@@ -5,6 +5,7 @@ const state = {
     jobs: [],
     stats: {},
     briefing: null,
+    sourceConfig: [],
     currentPage: 1,
     totalPages: 1,
     filters: {
@@ -32,8 +33,63 @@ document.addEventListener('DOMContentLoaded', () => {
     initToday();
     initApplications();
     initCompanies();
+    loadSourceConfig();
     loadToday();
 });
+
+// Which sources can run, and why the others cannot. Used by empty states and
+// the Scraper page so a missing API key is never silently reported as "0 jobs".
+async function loadSourceConfig() {
+    try {
+        const metrics = await fetchAPI('/sources/metrics');
+        state.sourceConfig = metrics.configuration || [];
+        renderSourceConfigNotice();
+    } catch (err) {
+        // Non-fatal: the rest of the dashboard still works without it.
+        console.warn('Could not load source configuration', err);
+    }
+}
+
+function renderSourceConfigNotice() {
+    // Un-check and lock the sources that cannot run, so the Scraper form never
+    // offers a choice the pipeline will silently skip.
+    (state.sourceConfig || []).forEach(s => {
+        const box = document.querySelector(`input[name="source"][value="${s.source}"]`);
+        if (!box) return;
+        box.disabled = !s.enabled;
+        if (!s.enabled) {
+            box.checked = false;
+            const label = box.closest('.checkbox-label');
+            if (label) {
+                label.classList.add('is-disabled');
+                label.title = s.reason || 'This source is switched off';
+            }
+        }
+    });
+
+    const host = document.getElementById('sourceConfigNotice');
+    if (!host) return;
+    const disabled = (state.sourceConfig || []).filter(s => !s.enabled);
+    if (!disabled.length) {
+        host.innerHTML = '';
+        return;
+    }
+    host.innerHTML = `
+        <div class="notice notice-info">
+            <i class="fas fa-circle-info"></i>
+            <div>
+                <strong>${disabled.length} source${disabled.length > 1 ? 's are' : ' is'} not running.</strong>
+                <ul class="notice-list">
+                    ${disabled.map(s => `<li><strong>${escapeHtml(s.label || s.source)}</strong> —
+                        ${escapeHtml(s.reason || 'disabled')}${
+                            s.signup_url
+                                ? ` (<a href="${escapeAttr(s.signup_url)}" target="_blank" rel="noopener">free key</a>)`
+                                : ''}</li>`).join('')}
+                </ul>
+                <span class="muted-note">Add the missing keys to your <code>.env</code> and restart.</span>
+            </div>
+        </div>`;
+}
 
 function initNavigation() {
     const navItems = document.querySelectorAll('.nav-item');
@@ -79,6 +135,16 @@ function initNavigation() {
         }
     }, 300));
 }
+
+// Links inside empty states / notices can jump to another view.
+document.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-goto-view]');
+    if (!target) return;
+    event.preventDefault();
+    const view = target.dataset.gotoView;
+    const navItem = document.querySelector(`.nav-item[data-view="${view}"]`);
+    if (navItem) navItem.click(); else switchView(view);
+});
 
 function switchView(view) {
     state.currentView = view;
@@ -136,7 +202,71 @@ function loadCurrentView() {
         case 'profile':
             loadProfile();
             break;
+        case 'scraper':
+            loadScraperStatus();
+            break;
     }
+}
+
+// The Scraper page is an operations view: it must say what the last run did,
+// whether one is running now, and when the scheduler fires next.
+async function loadScraperStatus() {
+    const panel = document.getElementById('lastScrapePanel');
+    if (!panel) return;
+    try {
+        const [status, schedule, runs] = await Promise.all([
+            fetchAPI('/scrape/status'),
+            fetchAPI('/schedule'),
+            fetchAPI('/search-runs?limit=1'),
+        ]);
+        loadSourceConfig();
+        renderScraperStatus(panel, status, schedule, (runs.runs || [])[0]);
+    } catch (err) {
+        panel.innerHTML = `<div class="muted-note">Could not load scraper status: ${
+            escapeHtml(err.message || 'unknown error')}</div>`;
+    }
+}
+
+function renderScraperStatus(panel, status, schedule, lastRun) {
+    const sch = schedule.status || {};
+    const running = status.status === 'running';
+
+    const scheduleLine = !sch.running
+        ? '<span class="pill pill-muted">Scheduler off</span>'
+        : `<span class="pill pill-ok">Scheduler on</span>
+           ${sch.next_run_at ? `next run ${formatDate(sch.next_run_at)}` : ''}`;
+
+    const lastLine = lastRun
+        ? `${formatDate(lastRun.completed_at || lastRun.started_at)} (${escapeHtml(lastRun.trigger || 'manual')})
+           — ${lastRun.jobs_discovered ?? 0} discovered,
+           <strong>${lastRun.jobs_accepted ?? 0} new</strong>,
+           ${lastRun.duplicates ?? 0} duplicates,
+           ${lastRun.jobs_rejected ?? 0} rejected,
+           ${lastRun.jobs_stale ?? 0} too old${
+             lastRun.duration_seconds != null
+               ? `, took ${Math.round(lastRun.duration_seconds)}s` : ''}${
+             lastRun.error_count
+               ? ` — <span class="pill pill-risk">${lastRun.error_count} error(s)</span>` : ''}`
+        : 'No search has been recorded yet.';
+
+    panel.innerHTML = `
+        <div class="scrape-status-row">
+            <div>
+                <span class="scrape-status-label">Last scrape</span>
+                <div>${lastLine}</div>
+            </div>
+            <div class="scrape-status-side">
+                ${running
+                    ? `<span class="pill pill-info">
+                         <i class="fas fa-spinner fa-spin"></i>
+                         Scrape running (${escapeHtml(status.trigger || 'manual')})</span>
+                       <div class="muted-note">${escapeHtml(status.message || '')}</div>`
+                    : scheduleLine}
+                ${sch.last_run_error
+                    ? `<div class="muted-note">Last failure: ${escapeHtml(sch.last_run_error)}</div>`
+                    : ''}
+            </div>
+        </div>`;
 }
 
 // =============================================================================
@@ -201,6 +331,7 @@ function initToday() {
 async function loadToday() {
     const limit = document.getElementById('todayLimit')?.value || 10;
     const realistic = document.getElementById('todayRealisticOnly')?.checked !== false;
+    showLoading('todayJobsList', 'Ranking today’s opportunities…');
     try {
         const data = await fetchAPI(`/briefing?limit=${limit}&realistic=${realistic}`);
         state.briefing = data;
@@ -209,9 +340,11 @@ async function loadToday() {
         loadAttention();
         updateNavBadges(data.counts);
     } catch (err) {
-        document.getElementById('todayJobsList').innerHTML =
-            `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i>
-             <p>Could not load your briefing: ${escapeHtml(err.message || 'unknown error')}</p></div>`;
+        showLoadError(
+            'todayJobsList',
+            `Could not load your briefing: ${err.message || 'unknown error'}`,
+            loadToday,
+        );
     }
 }
 
@@ -223,14 +356,30 @@ function renderBriefing(data) {
         `Good ${partOfDay}${name}`;
 
     const c = data.counts;
+    const recs = data.recommendation_counts || {};
+    const shown = (data.top_jobs || []).length;
+    const maxAge = data.thresholds?.today_max_age_days ?? 14;
+
+    // Lead with the action split, then say plainly what the list is scoped to.
+    const recLine = shown
+        ? [
+            recs['APPLY NOW'] ? `${recs['APPLY NOW']} apply now` : null,
+            recs['APPLY'] ? `${recs['APPLY']} apply` : null,
+            recs['WATCH'] ? `${recs['WATCH']} watch` : null,
+          ].filter(Boolean).join(' · ')
+        : '';
     document.getElementById('briefingSub').textContent =
         c.applyable_total === 0
             ? 'No open jobs match your profile yet — run a search to populate your queue.'
-            : `${c.applyable_total} open jobs match your profile. Here are the ${
-                (data.top_jobs || []).length} you should look at first.`;
+            : shown === 0
+                ? `Nothing posted in the last ${maxAge} days matches your target roles. `
+                  + `${c.applyable_total} older jobs are still on the Jobs page.`
+                : `${shown} to look at first${recLine ? ` — ${recLine}` : ''}. `
+                  + `${c.today_eligible ?? c.applyable_total} posted within `
+                  + `${maxAge} days match your target roles.`;
 
     const tiles = [
-        { label: 'New today', value: c.new_today, icon: 'fa-clock', tone: 'blue' },
+        { label: 'New since yesterday', value: c.new_today, icon: 'fa-clock', tone: 'blue' },
         { label: `Strong (${data.thresholds.strong}%+)`, value: c.strong_matches, icon: 'fa-bullseye', tone: 'green' },
         { label: `Excellent (${data.thresholds.excellent}%+)`, value: c.excellent_matches, icon: 'fa-star', tone: 'gold' },
         { label: 'Target companies', value: c.target_company_matches, icon: 'fa-building', tone: 'purple' },
@@ -438,8 +587,33 @@ const FRESHNESS_UI = {
     aging: { icon: '⚪', label: 'Posted 3-7d' },
     old: { icon: '🟠', label: 'Posted 7-14d' },
     stale: { icon: '🔴', label: 'Posted 14+ days' },
-    unknown: { icon: '❔', label: 'Date unknown' },
+    unknown: { icon: '❔', label: 'Posting date unknown' },
 };
+
+// The backend computes freshness against *now* and sends the exact age as
+// `posted_age_text`. Show that rather than only the bucket, so "aging" reads
+// as "posted 5d 22h ago" instead of an unfalsifiable label.
+function freshnessChip(job) {
+    const ui = FRESHNESS_UI[job.freshness_bucket] || FRESHNESS_UI.unknown;
+    const age = job.posted_date_known ? job.posted_age_text : null;
+    const text = age ? `Posted ${escapeHtml(age)}` : ui.label;
+    const title = job.posted_date_known
+        ? `${ui.label} · source posting date`
+        : 'The source did not publish a posting date';
+    return `<span title="${escapeAttr(title)}">${ui.icon} ${text}</span>`;
+}
+
+// Discovery is reported separately from posting date and always labelled as
+// discovery — rediscovering an old posting never makes it look new.
+function discoveryChip(job) {
+    if (!job.first_seen_age_text) return '';
+    const seen = `First seen ${escapeHtml(job.first_seen_age_text)}`;
+    const again = job.rediscovered && job.last_seen_age_text
+        ? ` · still listed ${escapeHtml(job.last_seen_age_text)}`
+        : '';
+    return `<span class="muted-note" title="When this tracker first discovered the posting">
+        <i class="fas fa-binoculars"></i> ${seen}${again}</span>`;
+}
 
 // Recommendation badge for the Phase 2 priority engine.
 const RECOMMENDATION_UI = {
@@ -450,14 +624,58 @@ const RECOMMENDATION_UI = {
     default: { icon: '❔', tone: 'muted', label: 'Unknown' },
 };
 
+// Every list has three honest states: loading, empty-with-a-reason, and error
+// -with-a-retry. A blank panel that might be any of the three is the one thing
+// none of them should look like.
+function showLoading(containerId, message = 'Loading…') {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = `<div class="loading-state">
+        <i class="fas fa-spinner fa-spin"></i>
+        <span>${escapeHtml(message)}</span>
+    </div>`;
+}
+
+function showLoadError(containerId, message, retryFn) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = `<div class="empty-state error-state">
+        <i class="fas fa-triangle-exclamation"></i>
+        <p>${escapeHtml(message)}</p>
+        <button class="btn btn-sm" data-retry-load>
+            <i class="fas fa-rotate-right"></i> Try again</button>
+    </div>`;
+    const retry = container.querySelector('[data-retry-load]');
+    if (retry && typeof retryFn === 'function') {
+        retry.addEventListener('click', retryFn);
+    }
+}
+
+// An empty queue is a real answer, not a bug — but it should tell the user
+// what would change it. Suggestions are derived from the live source
+// configuration, so we never suggest enabling something already on.
+function emptyQueueState() {
+    const disabled = (state.sourceConfig || []).filter(s => !s.enabled);
+    const maxAge = state.briefing?.thresholds?.today_max_age_days ?? 14;
+    const suggestions = [
+        `<li>Run a fresh scrape from the <a href="#" data-goto-view="scraper">Scraper</a> page</li>`,
+        ...disabled.slice(0, 3).map(s =>
+            `<li>Enable <strong>${escapeHtml(s.label || s.source)}</strong> — ${escapeHtml(s.reason || 'currently off')}</li>`),
+        `<li>Widen your location preferences in <a href="#" data-goto-view="profile">Profile</a></li>`,
+        `<li>Raise <code>TODAY_MAX_AGE_DAYS</code> (currently ${maxAge}) to include older postings</li>`,
+    ];
+    return `<div class="empty-state">
+        <i class="fas fa-inbox"></i>
+        <p>No fresh opportunities match your target roles right now.</p>
+        <ul class="empty-suggestions">${suggestions.join('')}</ul>
+    </div>`;
+}
+
 function renderSmartJobList(containerId, jobs) {
     const container = document.getElementById(containerId);
     if (!container) return;
     if (!jobs || !jobs.length) {
-        container.innerHTML = `<div class="empty-state">
-            <i class="fas fa-inbox"></i>
-            <p>Nothing to apply to right now. Run a search to refresh your queue.</p>
-        </div>`;
+        container.innerHTML = emptyQueueState();
         return;
     }
     container.innerHTML = jobs.map((job, index) => smartJobCard(job, index + 1)).join('');
@@ -505,8 +723,17 @@ function smartJobCard(job, rank) {
         ? `<a class="btn btn-primary btn-sm" href="${escapeAttr(job.application_url)}"
               target="_blank" rel="noopener" data-apply-job="${job.id}">
              <i class="fas fa-external-link-alt"></i> Apply now</a>`
-        : `<button class="btn btn-sm" disabled title="${escapeAttr(job.can_apply_label || 'Unable to verify')}">
+        : `<button class="btn btn-sm" disabled
+                   title="${escapeAttr(job.apply_status_detail || job.can_apply_label || 'Unable to verify')}">
              <i class="fas fa-unlink"></i> ${escapeHtml(job.can_apply_label || (job.application_url ? 'Unable to verify' : 'No apply link'))}</button>`;
+
+    // Offer a re-check whenever the link is not confirmed, so "Unable to
+    // verify" is a state the user can act on rather than a dead end.
+    const verifyButton = (!job.can_apply && job.application_url)
+        ? `<button class="btn btn-sm btn-ghost" data-verify-job="${job.id}"
+                   title="Check this apply link now">
+             <i class="fas fa-link"></i> Verify</button>`
+        : '';
 
     return `
     <article class="smart-card" data-job-id="${job.id}">
@@ -531,12 +758,13 @@ function smartJobCard(job, rank) {
                 <span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(job.location || 'Location unknown')}</span>
                 <span><i class="fas fa-laptop-house"></i> ${escapeHtml(job.remote_type || 'unknown')}</span>
                 <span title="${escapeAttr(job.sponsorship_reason || sponsorship.label)}">${sponsorship.icon} ${sponsorship.label}</span>
-                <span title="${escapeAttr(freshness.label)}">${freshness.icon} ${freshness.label}</span>
+                ${freshnessChip(job)}
                 <span class="badge-source">${escapeHtml(job.source || 'unknown')}</span>
                 <span class="badge-tier">${tier}</span>
                 ${family}
                 ${competition}
                 <span><i class="fas fa-dollar-sign"></i> ${escapeHtml(job.salary_display || 'Unknown')}</span>
+                ${discoveryChip(job)}
             </div>
             <div class="smart-explain">
                 ${reasons.length ? `<div class="explain-block ok">
@@ -554,6 +782,7 @@ function smartJobCard(job, rank) {
                     <i class="fas fa-eye"></i> View</button>
                 <button class="btn btn-sm btn-ghost" data-prepare-job="${job.id}">
                     <i class="fas fa-wand-magic-sparkles"></i> Prepare</button>
+                ${verifyButton}
                 ${applyButton}
                 <button class="btn btn-sm btn-ghost" data-mark-applied="${job.id}">
                     <i class="fas fa-check"></i> Mark applied</button>
@@ -584,6 +813,28 @@ function wireSmartJobCards(container) {
         el.addEventListener('click', async (e) => {
             e.stopPropagation();
             await markApplied(parseInt(el.dataset.markApplied, 10));
+        });
+    });
+    container.querySelectorAll('[data-verify-job]').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = parseInt(el.dataset.verifyJob, 10);
+            const original = el.innerHTML;
+            el.disabled = true;
+            el.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking…';
+            try {
+                const res = await fetchAPI(`/jobs/${id}/verify`, { method: 'POST' });
+                const status = res.verification.url_status;
+                showToast(res.verification.detail,
+                          status === 'dead' ? 'error'
+                          : status === 'verified' ? 'success' : 'warning');
+                // Re-render so the Apply button reflects the new status.
+                loadCurrentView();
+            } catch (err) {
+                showToast(err.message || 'Could not check this link', 'error');
+                el.disabled = false;
+                el.innerHTML = original;
+            }
         });
     });
     container.querySelectorAll('[data-favorite-job]').forEach(el => {
@@ -920,6 +1171,7 @@ async function loadCompanies() {
 // =============================================================================
 
 async function loadInsights() {
+    showLoading('analyticsPanel', 'Crunching your search history…');
     try {
         const [analytics, metrics, runs, external] = await Promise.all([
             fetchAPI('/analytics/outcomes'),
@@ -930,20 +1182,7 @@ async function loadInsights() {
 
         renderAnalytics(analytics);
 
-        document.getElementById('sourceMetricsBody').innerHTML = metrics.sources.length
-            ? metrics.sources.map(s => `
-                <tr>
-                    <td>${escapeHtml(s.source)}</td>
-                    <td>${s.jobs_discovered}</td>
-                    <td>${s.jobs_accepted}</td>
-                    <td>${s.duplicates}</td>
-                    <td>${s.expired}</td>
-                    <td>${s.missing_apply_url}</td>
-                    <td>${s.avg_match ?? '—'}</td>
-                    <td>${s.failures ? `<span class="pill pill-warn">${s.failures}</span>` : '0'}</td>
-                    <td>${s.last_successful_run ? formatDate(s.last_successful_run) : 'never'}</td>
-                </tr>`).join('')
-            : `<tr><td colspan="9" class="muted-note">No source runs recorded yet.</td></tr>`;
+        renderSourceHealth(metrics);
 
         document.getElementById('searchRunsBody').innerHTML = runs.runs.length
             ? runs.runs.map(r => `
@@ -966,6 +1205,81 @@ async function loadInsights() {
             </a>`).join('');
     } catch (err) {
         showToast(err.message || 'Could not load insights', 'error');
+        showLoadError('analyticsPanel',
+            `Could not load insights: ${err.message || 'unknown error'}`,
+            loadInsights);
+    }
+}
+
+const SOURCE_HEALTH_UI = {
+    healthy:  { icon: '✓', cls: 'pill-ok' },
+    failing:  { icon: '✕', cls: 'pill-risk' },
+    warning:  { icon: '!', cls: 'pill-warn' },
+    disabled: { icon: '—', cls: 'pill-muted' },
+    idle:     { icon: '·', cls: 'pill-muted' },
+    running:  { icon: '⟳', cls: 'pill-info' },
+};
+
+// A source that produced nothing must say *why*: switched off, missing
+// credentials, failing, or genuinely empty. "0 jobs" on its own hides a
+// configuration gap behind a result that looks legitimate.
+function renderSourceHealth(metrics) {
+    const body = document.getElementById('sourceMetricsBody');
+    if (!body) return;
+    const sources = metrics.sources || [];
+    if (!sources.length) {
+        body.innerHTML = `<tr><td colspan="9" class="muted-note">
+            No sources configured yet.</td></tr>`;
+        return;
+    }
+
+    body.innerHTML = sources.map(s => {
+        const ui = SOURCE_HEALTH_UI[s.health_state] || SOURCE_HEALTH_UI.idle;
+        const note = s.disabled_reason
+            ? `<div class="muted-note">${escapeHtml(s.disabled_reason)}${
+                s.signup_url
+                    ? ` — <a href="${escapeAttr(s.signup_url)}" target="_blank"
+                             rel="noopener">get a free key</a>`
+                    : ''}</div>`
+            : (s.last_message
+                ? `<div class="muted-note">${escapeHtml(s.last_message)}</div>` : '');
+        const rejectDetail = Object.entries(s.rejected_breakdown || {})
+            .filter(([, n]) => n > 0)
+            .map(([reason, n]) => `${reason.replace(/_/g, ' ')}: ${n}`)
+            .join(', ');
+        return `
+            <tr>
+                <td>
+                    <strong>${escapeHtml(s.label || s.source)}</strong>
+                    <span class="pill ${ui.cls}">${ui.icon} ${escapeHtml(s.health)}</span>
+                    ${note}
+                </td>
+                <td>${s.jobs_discovered}</td>
+                <td>${s.jobs_accepted}</td>
+                <td>${s.duplicates}</td>
+                <td title="${escapeAttr(rejectDetail)}">${s.jobs_rejected ?? 0}</td>
+                <td>${s.expired}</td>
+                <td>${s.avg_match ?? '—'}</td>
+                <td>${s.failures ? `<span class="pill pill-warn">${s.failures}</span>` : '0'}</td>
+                <td>${!s.configured
+                        ? '—'
+                        : (s.last_successful_run
+                            ? formatDate(s.last_successful_run) : 'never')}</td>
+            </tr>`;
+    }).join('');
+
+    const summary = metrics.summary || {};
+    const banner = document.getElementById('sourceHealthSummary');
+    if (banner) {
+        const parts = [];
+        if (summary.healthy) parts.push(`${summary.healthy} healthy`);
+        if (summary.failing) parts.push(`<strong>${summary.failing} failing</strong>`);
+        if (summary.warning) parts.push(`${summary.warning} returning nothing`);
+        if (summary.disabled) parts.push(`${summary.disabled} disabled`);
+        banner.innerHTML = parts.length
+            ? parts.join(' · ')
+            : 'No source runs recorded yet.';
+        banner.className = summary.failing ? 'health-banner risk' : 'health-banner';
     }
 }
 
@@ -1089,6 +1403,7 @@ function renderStatusChart(data) {
 }
 
 async function loadJobs() {
+    showLoading('jobsList', 'Loading jobs…');
     try {
         const params = new URLSearchParams({
             page: state.currentPage,
@@ -1116,6 +1431,8 @@ async function loadJobs() {
         loadMetroBreakdown();
     } catch (error) {
         console.error('Error loading jobs:', error);
+        showLoadError('jobsList',
+            `Could not load jobs: ${error.message || 'unknown error'}`, loadJobs);
     }
 }
 
@@ -2107,19 +2424,38 @@ function getCompanyInitials(company) {
     return company.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
 }
 
+// The API sends UTC-aware ISO strings. This also repairs a bare naive string
+// defensively: `new Date('2026-09-07T17:30:00')` is read as *local* time, and
+// on a UTC-5 machine that put every timestamp hours in the future, so
+// everything rendered as "Just now".
+function parseApiDate(dateStr) {
+    if (!dateStr) return null;
+    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(dateStr);
+    const date = new Date(hasZone ? dateStr : `${dateStr}Z`);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatDate(dateStr) {
-    if (!dateStr) return 'Unknown';
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now - date;
-    
+    const date = parseApiDate(dateStr);
+    if (!date) return 'Unknown';
+    const diff = Date.now() - date.getTime();
+
+    // A timestamp in the future means clock skew, not a fresh event. Say so
+    // rather than reporting it as "just now".
+    if (diff < -60 * 1000) {
+        return date.toLocaleString('en-US',
+            { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    const minutes = Math.floor(diff / (1000 * 60));
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (hours < 1) return 'Just now';
+
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
     if (days < 7) return `${days}d ago`;
-    
+
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -2170,6 +2506,11 @@ const nuworksState = {
     isLoggingIn: false
 };
 
+// DORMANT: NUWorks is off by default (NUWORKS_ENABLED=false) and its markup is
+// not in index.html, so nothing calls initNUWorks() and these handlers never
+// bind. The backend routes (/api/nuworks/*) are still live, so this is kept
+// rather than deleted — re-adding the markup and calling initNUWorks() from
+// DOMContentLoaded is all it needs. Every lookup below is null-guarded.
 function initNUWorks() {
     const startLoginBtn = document.getElementById('nuworksStartLogin');
     const checkDuoBtn = document.getElementById('nuworksCheckDuo');

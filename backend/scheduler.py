@@ -56,7 +56,15 @@ def _timezone(name):
 
 
 def run_daily_search(app, trigger='scheduled'):
-    """Execute one full daily run: scrape, then notifications."""
+    """Execute one full scheduled run: scrape, verify, notify.
+
+    Claims the same process-wide scrape slot the "Run search now" button uses.
+    A scheduled tick that lands mid-scrape is skipped rather than queued —
+    running the same sources twice minutes apart finds nothing the first run
+    did not, and two writers on one SQLite file is how the lock errors start.
+    """
+    from backend import scrape_state
+
     with app.app_context():
         from backend.models import (
             Application, Job, Notification, Preference, WatchlistCompany, db,
@@ -69,35 +77,50 @@ def run_daily_search(app, trigger='scheduled'):
         sources = schedule.get('sources') or list(Config.DAILY_SOURCES)
         keywords = Config.SEARCH_KEYWORDS[:12]
 
-        logger.info('Daily search starting (%s): %s', trigger, sources)
+        try:
+            scrape_state.begin(trigger=trigger, sources=sources,
+                               params={'sources': sources, 'keywords': keywords})
+        except scrape_state.ScrapeInProgress as busy:
+            logger.info(
+                'SCRAPE SKIPPED — a %s scrape started at %s is still running',
+                busy.state.get('trigger'), busy.state.get('started_at'),
+            )
+            return {'skipped': True, 'reason': 'scrape already running'}
+
+        logger.info('SCRAPE START (%s): %s', trigger, sources)
         results = {}
         try:
-            manager = JobScraperManager(db.session, min_match_score=25)
+            manager = JobScraperManager(
+                db.session, min_match_score=25,
+                progress_callback=scrape_state.update_progress,
+            )
             results = manager.scrape_all(
                 sources=sources,
                 keywords=keywords,
                 locations=Config.TARGET_LOCATIONS,
                 trigger=trigger,
             )
-        except Exception:
-            logger.exception('Daily search failed')
+        except Exception as exc:
+            logger.exception('Scheduled search failed')
             try:
                 db.session.rollback()
             except Exception:
                 pass
+            scrape_state.fail(exc)
+            return {'error': str(exc)}
 
         # Verify application URLs for top ranked jobs (never invents URLs)
         try:
             from services.batch_verify import verify_top_jobs
             verify_summary = verify_top_jobs(
                 Job, session=db.session,
-                limit=int(getattr(Config, 'VERIFY_TOP_N', 15)),
+                limit=int(getattr(Config, 'VERIFY_TOP_N', 25)),
             )
             results['verify'] = {
-                k: verify_summary[k]
-                for k in ('checked', 'verified', 'dead', 'unreachable', 'unknown')
+                k: verify_summary.get(k)
+                for k in ('checked', 'verified', 'dead', 'blocked',
+                          'redirected', 'unreachable', 'unknown')
             }
-            logger.info('Daily verify: %s', results['verify'])
         except Exception:
             logger.exception('Batch URL verification failed')
             try:
@@ -109,7 +132,7 @@ def run_daily_search(app, trigger='scheduled'):
             created = generate_notifications(
                 db, Job, Application, Notification, WatchlistCompany,
             )
-            logger.info('Daily search created %d notifications', created)
+            logger.info('Scheduled search created %d notifications', created)
         except Exception:
             logger.exception('Notification generation failed')
             try:
@@ -117,25 +140,42 @@ def run_daily_search(app, trigger='scheduled'):
             except Exception:
                 pass
 
+        scrape_state.finish(
+            results,
+            message=(
+                f"Scheduled run done — {results.get('total_new_jobs', 0)} new jobs"
+            ),
+            sources_total=len(sources),
+        )
         logger.info(
-            'Daily search finished: %s new jobs',
-            results.get('total_new_jobs', 0),
+            'SCRAPE COMPLETE (%s): %s new jobs',
+            trigger, results.get('total_new_jobs', 0),
         )
         return results
 
 
 def start(app):
-    """Start the scheduler. Safe to call once at startup."""
+    """Start the scheduler. Idempotent — a second call is a no-op.
+
+    Flask's reloader and any accidental second ``start()`` would otherwise
+    create a second scheduler, and two schedulers means two scrapes per tick.
+    """
     global _scheduler, _fallback_thread
 
     from backend.models import Preference
     from config.settings import Config
 
+    if _scheduler is not None or (
+        _fallback_thread is not None and _fallback_thread.is_alive()
+    ):
+        logger.info('Scheduler already running; not starting a second one')
+        return _scheduler or _fallback_thread
+
     with app.app_context():
         schedule = _load_schedule(Preference, Config)
 
     if not schedule.get('enabled'):
-        logger.info('Daily scheduler disabled by configuration')
+        logger.info('Search scheduler disabled by configuration')
         return None
 
     mode = schedule.get('mode', Config.SCHEDULE_MODE)
@@ -213,10 +253,53 @@ def next_run_time():
     return None
 
 
+def status():
+    """What the Scheduler panel needs: is it up, when did it last run, did it fail.
+
+    Last-run facts come from the shared scrape state, so a scheduled run and a
+    manual run report through the same fields.
+    """
+    from backend import scrape_state
+
+    snapshot = scrape_state.snapshot()
+    if _scheduler is not None:
+        backend = 'apscheduler'
+        running = _scheduler.running
+    elif _fallback_thread is not None:
+        backend = 'timer-thread'
+        running = _fallback_thread.is_alive()
+    else:
+        backend, running = None, False
+
+    return {
+        'running': running,
+        'backend': backend,
+        'next_run_at': next_run_time(),
+        'scrape_in_progress': snapshot['status'] == 'running',
+        'current_trigger': snapshot.get('trigger'),
+        'last_run_at': snapshot.get('last_completed_at'),
+        'last_run_status': snapshot.get('last_status'),
+        'last_run_trigger': snapshot.get('last_trigger'),
+        'last_run_new_jobs': snapshot.get('last_new_jobs'),
+        'last_run_error': snapshot.get('last_error'),
+        # The scheduler lives inside the Flask process. Closing the terminal
+        # that runs `python run.py` stops it; nothing runs while the app is down.
+        'requires_app_running': True,
+    }
+
+
 def stop():
+    """Shut down cleanly so Ctrl+C does not leave a thread behind."""
+    global _scheduler, _fallback_thread
+
     _stop_event.set()
     if _scheduler is not None:
         try:
             _scheduler.shutdown(wait=False)
         except Exception:
-            pass
+            logger.debug('Scheduler shutdown raised', exc_info=True)
+        _scheduler = None
+    if _fallback_thread is not None:
+        # Daemon thread; the stop event releases it from its wait().
+        _fallback_thread = None
+    _stop_event.clear()

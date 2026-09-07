@@ -81,7 +81,7 @@
                     <button class="menu-toggle" id="menuToggle">
                         <i class="fas fa-bars"></i>
                     </button>
-                    <h1 class="page-title" id="pageTitle">Dashboard</h1>
+                    <h1 class="page-title" id="pageTitle">Today</h1>
                 </div>
                 <div class="header-right">
                     <div class="search-box">
@@ -195,14 +195,15 @@
                 <div id="analyticsPanel" class="analytics-panel"></div>
 
                 <div class="section-header">
-                    <h3><i class="fas fa-database"></i> Source quality</h3>
+                    <h3><i class="fas fa-database"></i> Source health</h3>
+                    <div id="sourceHealthSummary" class="health-banner"></div>
                 </div>
                 <div class="source-metrics-wrap">
                     <table class="application-table">
                         <thead>
                             <tr>
-                                <th>Source</th><th>Discovered</th><th>Accepted</th>
-                                <th>Duplicates</th><th>Expired</th><th>No apply URL</th>
+                                <th>Source</th><th>Discovered</th><th>New</th>
+                                <th>Duplicates</th><th>Rejected</th><th>Expired</th>
                                 <th>Avg match</th><th>Failures</th><th>Last success</th>
                             </tr>
                         </thead>
@@ -449,6 +450,8 @@
                             <h3><i class="fas fa-radar"></i> Full-Time Job Scraper</h3>
                         </div>
                         <div class="card-body">
+                            <div id="lastScrapePanel" class="last-scrape-panel"></div>
+                            <div id="sourceConfigNotice"></div>
                             <div class="scraper-form">
                                 <div class="form-group">
                                     <label>Active Sources</label>

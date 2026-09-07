@@ -9,6 +9,29 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
+def _iso(value):
+    """Serialize a datetime as an unambiguous UTC ISO string.
+
+    SQLite drops tzinfo, so everything read back is naive — and a naive
+    ISO string like ``2026-09-07T17:30:00`` is parsed by
+    ``new Date()`` as *local* time. On a UTC-5 machine that put every
+    timestamp five hours in the future, so the UI reported every job and every
+    search run as "Just now".
+
+    Everything stored is UTC, so naive values get UTC attached before
+    serializing and the browser converts to local time correctly.
+    """
+    if value is None:
+        return None
+    # Plain dates (grad_date, opt_start_date) carry no time and no zone —
+    # serialize them as-is rather than inventing midnight UTC.
+    if not isinstance(value, datetime):
+        return value.isoformat()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _load_json(raw, default):
     if not raw:
         return default
@@ -16,6 +39,47 @@ def _load_json(raw, default):
         return json.loads(raw)
     except (ValueError, TypeError):
         return default
+
+
+# Apply is enabled only for a link we fetched and read. Every other state says
+# plainly what we found; none of them claims the job is fake, and none of them
+# quietly enables Apply.
+_APPLY_LABELS = {
+    'verified': 'Apply now',
+    'dead': 'Posting closed',
+    'blocked': 'Unable to verify — site blocked the check',
+    'redirected': 'Unable to verify — link redirects',
+    'unverified': 'Unable to verify',
+    'unknown': 'Not checked yet',
+}
+_APPLY_DETAILS = {
+    'verified': 'We loaded this page and found no closure notice.',
+    'dead': 'The page returned "not found" or says the posting is closed.',
+    'blocked': (
+        'The site returned a login wall or rate limit, so we could not read '
+        'the posting. It may still be open — open it yourself to check.'
+    ),
+    'redirected': (
+        'The link redirected somewhere else, so we could not confirm the '
+        'original posting. Open it yourself to check.'
+    ),
+    'unverified': 'We could not reach this page. It may still be open.',
+    'unknown': 'This link has not been checked yet.',
+}
+
+
+def _apply_label(url, status):
+    if not url:
+        return 'No apply link'
+    return _APPLY_LABELS.get((status or 'unknown').lower(), 'Unable to verify')
+
+
+def _apply_detail(url, status):
+    if not url:
+        return 'No application URL was published by the source.'
+    return _APPLY_DETAILS.get(
+        (status or 'unknown').lower(), 'This link has not been checked yet.'
+    )
 
 
 class Job(db.Model):
@@ -99,10 +163,13 @@ class Job(db.Model):
     source_url = db.Column(db.String(500), nullable=True)      # listing page
     application_url = db.Column(db.String(500), nullable=True)  # real apply page
     application_url_status = db.Column(db.String(20), default='unknown')
-    # unknown | unverified | verified | dead | search_fallback
+    # unknown | unverified | verified | dead | blocked | redirected
     application_url_checked_at = db.Column(db.DateTime, nullable=True)
     date_posted_origin = db.Column(db.String(20), nullable=True)
     # feed | parsed_relative | unknown  — never fabricate a posting date
+    # The source's own "last updated" timestamp, when it publishes one. A
+    # separate fact from date_posted: editing a listing does not repost it.
+    source_updated_at = db.Column(db.DateTime, nullable=True)
     last_verified_at = db.Column(db.DateTime, nullable=True)
     verification_status = db.Column(db.String(20), default='unverified')
     # unverified | active | expired | unreachable
@@ -181,27 +248,59 @@ class Job(db.Model):
         """The URL to send the user to, only when we actually have one."""
         return self.application_url or None
 
-    def to_dict(self):
+    def live_freshness(self, now=None):
+        """Freshness recomputed against *now*, not against scoring time.
+
+        The stored ``freshness_bucket``/``freshness_hours`` columns exist so
+        the pipeline can filter in SQL, but they are only accurate as of the
+        last refresh. Every read path uses this instead, so a job scored two
+        weeks ago can never keep claiming it was posted yesterday.
+
+        Derived from ``date_posted`` alone. Rediscovering a job does not make
+        it newer, so scrape time is never substituted for a posting date.
+        """
+        from services.maintenance import live_freshness as _live
+        return _live(self.date_posted, now=now)
+
+    def age_days(self, now=None):
+        """Whole days since the source posted this job, or None if unknown."""
+        hours, _ = self.live_freshness(now=now)
+        return None if hours is None else hours // 24
+
+    # Descriptions are the bulk of a job row. In a list of 200 they added up
+    # to megabytes the browser never rendered — the detail modal re-fetches
+    # the single job anyway. `summary=True` sends a preview instead.
+    LIST_DESCRIPTION_CHARS = 400
+
+    def to_dict(self, summary=False):
+        description = self.description
+        if summary and description and len(description) > self.LIST_DESCRIPTION_CHARS:
+            description = description[:self.LIST_DESCRIPTION_CHARS].rstrip() + '…'
+
         data = {
             'id': self.id,
             'title': self.title,
             'company': self.company,
             'location': self.location,
-            'description': self.description,
+            'description': description,
+            'description_truncated': bool(
+                summary and self.description
+                and len(self.description) > self.LIST_DESCRIPTION_CHARS
+            ),
             'job_url': self.job_url,
             'source': self.source,
             'salary_min': self.salary_min,
             'salary_max': self.salary_max,
             'job_type': self.job_type,
-            'date_posted': self.date_posted.isoformat() if self.date_posted else None,
-            'date_scraped': self.date_scraped.isoformat() if self.date_scraped else None,
+            'date_posted':_iso(self.date_posted),
+            'date_scraped':_iso(self.date_scraped),
             'is_remote': self.is_remote,
             'is_favorite': self.is_favorite,
             'is_applied': self.is_applied,
             'is_hidden': self.is_hidden,
             'application_status': self.application_status,
             'notes': self.notes,
-            'applied_date': self.applied_date.isoformat() if self.applied_date else None,
+            'applied_date':_iso(self.applied_date),
             'match_score': self.match_score,
             'is_everify': self.is_everify,
             'opt_field_related': self.opt_field_related,
@@ -209,7 +308,6 @@ class Job(db.Model):
             'h1b_lca_count': self.h1b_lca_count,
             'wage_level': self.wage_level,
             'employer_match_conf': self.employer_match_conf,
-            'freshness_hours': self.freshness_hours,
             'opt_fit_score': self.opt_fit_score,
             'worksite_city': self.worksite_city,
             'worksite_state': self.worksite_state,
@@ -226,40 +324,35 @@ class Job(db.Model):
             'market': self.market,
             'salary_predicted': self.salary_predicted,
             'description_partial': self.description_partial,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
-        }
+            'created_at':_iso(self.created_at),
+            'updated_at':_iso(self.updated_at)}
         data.update({
             'source_url': self.source_url,
             'application_url': self.application_url,
             'application_url_status': self.application_url_status or 'unknown',
-            'application_url_checked_at': (
-                self.application_url_checked_at.isoformat()
-                if self.application_url_checked_at else None
-            ),
+            'application_url_checked_at': _iso(self.application_url_checked_at),
             # Apply Now is shown only after the stored URL has been checked live.
             'can_apply': bool(
                 self.application_url
                 and self.application_url_status == 'verified'
             ),
-            'can_apply_label': (
-                'Apply now' if (
-                    self.application_url
-                    and self.application_url_status == 'verified'
-                ) else (
-                    'Unable to verify' if self.application_url else 'No apply link'
-                )
+            'can_apply_label': _apply_label(
+                self.application_url, self.application_url_status
+            ),
+            'apply_status_detail': _apply_detail(
+                self.application_url, self.application_url_status
             ),
             'date_posted_origin': self.date_posted_origin or 'unknown',
-            'discovered_at': self.date_scraped.isoformat() if self.date_scraped else None,
-            'last_verified_at': self.last_verified_at.isoformat() if self.last_verified_at else None,
+            'source_updated_at': _iso(self.source_updated_at),
+            'discovered_at':_iso(self.date_scraped),
+            'last_verified_at':_iso(self.last_verified_at),
             'verification_status': self.verification_status or 'unverified',
             'is_expired': bool(self.is_expired),
             'dedupe_key': self.dedupe_key,
             'duplicate_of_id': self.duplicate_of_id,
             'alt_source_urls': _load_json(self.alt_source_urls, []),
-            'first_seen': self.first_seen.isoformat() if self.first_seen else None,
-            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'first_seen':_iso(self.first_seen),
+            'last_seen':_iso(self.last_seen),
             'source_count': self.source_count or 1,
             'source_list': _load_json(self.source_list, []),
             'possible_repost': bool(self.possible_repost),
@@ -281,8 +374,7 @@ class Job(db.Model):
             'match_risks': _load_json(self.match_risks, []),
             'opportunity_breakdown': _load_json(self.opportunity_breakdown, {}),
             'quality_flags': _load_json(self.quality_flags, []),
-            'freshness_bucket': self.freshness_bucket,
-            'scored_at': self.scored_at.isoformat() if self.scored_at else None,
+            'scored_at':_iso(self.scored_at),
             'is_not_interested': bool(self.is_not_interested),
             'salary_display': self._salary_display(),
             # Phase 2 / 5 / 9 / 10
@@ -293,10 +385,7 @@ class Job(db.Model):
             'competition_signal': self.competition_signal,
             'applicant_count': self.applicant_count,
             'applicant_count_source': self.applicant_count_source,
-            'competition_captured_at': (
-                self.competition_captured_at.isoformat()
-                if self.competition_captured_at else None
-            ),
+            'competition_captured_at': _iso(self.competition_captured_at),
             'competition_breakdown': _load_json(self.competition_breakdown, {}),
             'readiness_breakdown': _load_json(self.readiness_breakdown, {}),
             'skill_gap_matrix': _load_json(self.skill_gap_matrix, []),
@@ -317,6 +406,35 @@ class Job(db.Model):
             # V3 — Contact intelligence
             'recommended_contact': _load_json(self.recommended_contact_json, None),
         })
+
+        # ---- Freshness, always computed against *now* -----------------------
+        # Serving the stored columns here is what used to make a job posted 14
+        # days ago render as "Posted 6-24 hours ago". Rediscovery does not
+        # reset any of this; only `date_posted` feeds it.
+        from services.freshness import BUCKET_LABELS, human_age
+
+        hours, bucket = self.live_freshness()
+        data['freshness_hours'] = hours
+        data['freshness_bucket'] = bucket or 'unknown'
+        data['freshness_label'] = BUCKET_LABELS.get(bucket or 'unknown')
+        data['posted_age_days'] = None if hours is None else hours // 24
+        data['posted_age_text'] = (
+            human_age(self.date_posted) if self.date_posted else 'Posting date unknown'
+        )
+        data['posted_date_known'] = self.date_posted is not None
+        # Discovery is reported separately and labelled as discovery, so the UI
+        # can say "we first saw this 3 days ago" without implying it was posted
+        # then.
+        data['first_seen_age_text'] = (
+            human_age(self.first_seen or self.date_scraped)
+            if (self.first_seen or self.date_scraped) else None
+        )
+        data['last_seen_age_text'] = (
+            human_age(self.last_seen) if self.last_seen else None
+        )
+        data['rediscovered'] = bool(
+            self.last_seen and self.first_seen and self.last_seen > self.first_seen
+        )
         return data
 
     def _salary_display(self):
@@ -362,9 +480,8 @@ class SearchLog(db.Model):
             'jobs_found': self.jobs_found,
             'status': self.status,
             'error_message': self.error_message,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None
-        }
+            'started_at':_iso(self.started_at),
+            'completed_at':_iso(self.completed_at)}
 
 
 class UserProfile(db.Model):
@@ -399,8 +516,8 @@ class UserProfile(db.Model):
             'linkedin_url': self.linkedin_url,
             'resume_path': self.resume_path,
             'target_role': self.target_role,
-            'grad_date': self.grad_date.isoformat() if self.grad_date else None,
-            'opt_start_date': self.opt_start_date.isoformat() if self.opt_start_date else None,
+            'grad_date':_iso(self.grad_date),
+            'opt_start_date':_iso(self.opt_start_date),
             'stem_eligible': self.stem_eligible,
             'unemployment_days': self.unemployment_days,
         }
@@ -427,7 +544,7 @@ class EVerifyEmployer(db.Model):
             'normalized_name': self.normalized_name,
             'city': self.city,
             'state': self.state,
-            'last_updated': self.last_updated.isoformat() if self.last_updated else None,
+            'last_updated':_iso(self.last_updated),
         }
 
 
@@ -524,7 +641,7 @@ class MetroOpportunity(db.Model):
             'employer_count': self.employer_count,
             'top5_employer_share': self.top5_employer_share,
             'flag': self.flag,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'updated_at':_iso(self.updated_at),
         }
 
 
@@ -570,8 +687,8 @@ class ProfileExperience(db.Model):
         return {
             'id': self.id, 'title': self.title, 'company': self.company,
             'location': self.location,
-            'start_date': self.start_date.isoformat() if self.start_date else None,
-            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'start_date':_iso(self.start_date),
+            'end_date':_iso(self.end_date),
             'is_current': self.is_current,
             'employment_type': self.employment_type,
             'description': self.description,
@@ -595,8 +712,8 @@ class ProfileEducation(db.Model):
         return {
             'id': self.id, 'degree': self.degree, 'field': self.field,
             'school': self.school, 'gpa': self.gpa,
-            'start_date': self.start_date.isoformat() if self.start_date else None,
-            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'start_date':_iso(self.start_date),
+            'end_date':_iso(self.end_date),
             'is_current': self.is_current,
         }
 
@@ -636,7 +753,7 @@ class Preference(db.Model):
 
     def to_dict(self):
         return {'key': self.key, 'value': self.parsed,
-                'updated_at': self.updated_at.isoformat() if self.updated_at else None}
+                'updated_at':_iso(self.updated_at)}
 
 
 class WatchlistCompany(db.Model):
@@ -704,18 +821,16 @@ class Application(db.Model):
             'id': self.id, 'job_id': self.job_id, 'company': self.company,
             'role': self.role, 'application_url': self.application_url,
             'status': self.status,
-            'date_applied': self.date_applied.isoformat() if self.date_applied else None,
+            'date_applied':_iso(self.date_applied),
             'resume_version': self.resume_version,
             'cover_letter': self.cover_letter,
             'recruiter_name': self.recruiter_name,
             'recruiter_email': self.recruiter_email,
-            'next_followup_date': (
-                self.next_followup_date.isoformat() if self.next_followup_date else None
-            ),
+            'next_followup_date': _iso(self.next_followup_date),
             'followup_count': self.followup_count,
             'interview_dates': _load_json(self.interview_dates, []),
             'notes': self.notes, 'outcome': self.outcome,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_at':_iso(self.created_at),
         }
 
 
@@ -738,7 +853,7 @@ class ApplicationEvent(db.Model):
             'id': self.id, 'application_id': self.application_id,
             'event_type': self.event_type, 'from_status': self.from_status,
             'to_status': self.to_status, 'detail': self.detail,
-            'occurred_at': self.occurred_at.isoformat() if self.occurred_at else None,
+            'occurred_at':_iso(self.occurred_at),
         }
 
 
@@ -809,25 +924,21 @@ class Contact(db.Model):
             'email': self.email, 'email_state': self.email_state or 'NOT_FOUND',
             'email_source': self.email_source,
             'email_verified': bool(self.email_verified),
-            'email_discovered_at': (
-                self.email_discovered_at.isoformat() if self.email_discovered_at else None
-            ),
+            'email_discovered_at': _iso(self.email_discovered_at),
             'linkedin_url': self.linkedin_url,
             'contact_relevance_score': self.contact_relevance_score,
             'is_recommended': bool(self.is_recommended),
             'contact_status': self.contact_status or 'NOT_CONTACTED',
-            'contacted_at': self.contacted_at.isoformat() if self.contacted_at else None,
+            'contacted_at':_iso(self.contacted_at),
             'contact_method': self.contact_method,
             'message_draft': self.message_draft,
             'response_status': self.response_status,
-            'follow_up_date': (
-                self.follow_up_date.isoformat() if self.follow_up_date else None
-            ),
+            'follow_up_date': _iso(self.follow_up_date),
             'follow_up_count': self.follow_up_count or 0,
             'notes': self.notes,
-            'discovered_at': self.discovered_at.isoformat() if self.discovered_at else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'discovered_at':_iso(self.discovered_at),
+            'created_at':_iso(self.created_at),
+            'updated_at':_iso(self.updated_at),
         }
 
 
@@ -858,7 +969,7 @@ class Notification(db.Model):
             'body': self.body, 'job_id': self.job_id,
             'application_id': self.application_id, 'severity': self.severity,
             'is_read': self.is_read,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_at':_iso(self.created_at),
         }
 
 
@@ -875,8 +986,13 @@ class SearchRun(db.Model):
     sources = db.Column(db.Text)  # JSON list
     keywords = db.Column(db.Text)  # JSON list
     jobs_discovered = db.Column(db.Integer, default=0)
-    jobs_accepted = db.Column(db.Integer, default=0)
+    jobs_accepted = db.Column(db.Integer, default=0)   # genuinely new jobs
+    jobs_matched = db.Column(db.Integer, default=0)    # passed the scoring gate
+    jobs_rejected = db.Column(db.Integer, default=0)
+    jobs_stale = db.Column(db.Integer, default=0)      # dropped for age at ingest
     duplicates = db.Column(db.Integer, default=0)
+    sources_disabled = db.Column(db.Integer, default=0)
+    sources_failed = db.Column(db.Integer, default=0)
     avg_match = db.Column(db.Float, nullable=True)
     strong_matches = db.Column(db.Integer, default=0)
     excellent_matches = db.Column(db.Integer, default=0)
@@ -892,14 +1008,23 @@ class SearchRun(db.Model):
             'keywords': _load_json(self.keywords, []),
             'jobs_discovered': self.jobs_discovered,
             'jobs_accepted': self.jobs_accepted,
+            'jobs_matched': self.jobs_matched,
+            'jobs_rejected': self.jobs_rejected,
+            'jobs_stale': self.jobs_stale,
             'duplicates': self.duplicates,
+            'sources_disabled': self.sources_disabled,
+            'sources_failed': self.sources_failed,
+            'duration_seconds': (
+                round((self.completed_at - self.started_at).total_seconds(), 1)
+                if (self.completed_at and self.started_at) else None
+            ),
             'avg_match': self.avg_match,
             'strong_matches': self.strong_matches,
             'excellent_matches': self.excellent_matches,
             'error_count': self.error_count,
             'error_summary': self.error_summary,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'started_at':_iso(self.started_at),
+            'completed_at':_iso(self.completed_at),
         }
 
 
@@ -914,13 +1039,22 @@ class SourceRun(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     search_run_id = db.Column(db.Integer, db.ForeignKey('search_run.id'), nullable=True)
     source = db.Column(db.String(50), nullable=False)
-    status = db.Column(db.String(20), default='success')  # success | failed
-    jobs_discovered = db.Column(db.Integer, default=0)
-    jobs_accepted = db.Column(db.Integer, default=0)
+    # success | empty | failed | disabled | running.
+    # 'empty' and 'disabled' are deliberately distinct: a source that ran and
+    # found nothing is a real answer, a source that could not run is a
+    # configuration gap. Collapsing both into "success, 0 jobs" hides the gap.
+    status = db.Column(db.String(20), default='success')
+    jobs_discovered = db.Column(db.Integer, default=0)   # raw listings seen
+    jobs_accepted = db.Column(db.Integer, default=0)     # stored as NEW jobs
+    jobs_matched = db.Column(db.Integer, default=0)      # passed the scoring gate
+    jobs_rejected = db.Column(db.Integer, default=0)     # dropped before storage
+    rejected_breakdown = db.Column(db.Text)              # JSON {reason: count}
     duplicates = db.Column(db.Integer, default=0)
     expired = db.Column(db.Integer, default=0)
     missing_apply_url = db.Column(db.Integer, default=0)
     avg_match = db.Column(db.Float, nullable=True)
+    duration_seconds = db.Column(db.Float, nullable=True)
+    message = db.Column(db.Text)                         # why empty / disabled
     error_message = db.Column(db.Text)
     started_at = db.Column(db.DateTime, default=_utcnow)
     completed_at = db.Column(db.DateTime, nullable=True)
@@ -931,11 +1065,17 @@ class SourceRun(db.Model):
             'source': self.source, 'status': self.status,
             'jobs_discovered': self.jobs_discovered,
             'jobs_accepted': self.jobs_accepted,
+            'jobs_matched': self.jobs_matched,
+            'jobs_rejected': self.jobs_rejected,
+            'rejected_breakdown': _load_json(self.rejected_breakdown, {}),
             'duplicates': self.duplicates, 'expired': self.expired,
             'missing_apply_url': self.missing_apply_url,
-            'avg_match': self.avg_match, 'error_message': self.error_message,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'avg_match': self.avg_match,
+            'duration_seconds': self.duration_seconds,
+            'message': self.message,
+            'error_message': self.error_message,
+            'started_at':_iso(self.started_at),
+            'completed_at':_iso(self.completed_at),
         }
 
 
@@ -965,7 +1105,7 @@ class ApplicationPrep(db.Model):
             'professional_summary': self.professional_summary,
             'screening_questions': _load_json(self.screening_questions, []),
             'highlight_skills': _load_json(self.highlight_skills, []),
-            'generated_at': self.generated_at.isoformat() if self.generated_at else None,
+            'generated_at':_iso(self.generated_at),
         }
 
 

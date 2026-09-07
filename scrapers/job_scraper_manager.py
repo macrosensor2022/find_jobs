@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 import sys
 import os
@@ -39,6 +39,8 @@ from services.dedupe import (
 )
 from services.freshness import is_expired as freshness_is_expired
 from services.ranking import apply_to_model, score_job
+from services import source_health
+from config.settings import Config
 import re
 
 
@@ -74,6 +76,7 @@ class JobScraperManager:
         self.nuworks_scraper = None
         self._watchlist_cache = None
         self._location_prefs_cache = None
+        self._last_rejections = {}
 
     def init_nuworks(self, username: str = None, password: str = None):
         """Opt-in only. NUWorks is excluded from the normal workflow."""
@@ -144,9 +147,29 @@ class JobScraperManager:
         discovery time is not a reason to discard a real posting.
         """
         accepted = []
+        # Every discarded listing is counted under a reason so the Scraper page
+        # can explain a low accept rate instead of just showing a small number.
+        rejected = {
+            'malformed': 0, 'scoring_error': 0, 'ineligible': 0,
+            'below_min_score': 0, 'too_old': 0,
+        }
+        max_age_days = getattr(Config, 'SCRAPE_MAX_AGE_DAYS', 14)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
         for job_data in jobs:
             if not isinstance(job_data, dict) or not job_data.get('title'):
+                rejected['malformed'] += 1
                 continue
+
+            # Age is judged on the *source* posting date. A listing with no
+            # known posting date is kept — unknown is not the same as old.
+            posted = job_data.get('date_posted')
+            if isinstance(posted, datetime):
+                dp = posted if posted.tzinfo else posted.replace(tzinfo=timezone.utc)
+                if dp < cutoff:
+                    rejected['too_old'] += 1
+                    continue
+
             try:
                 result = score_job(
                     job_data,
@@ -155,6 +178,7 @@ class JobScraperManager:
                 )
             except Exception:
                 logger.exception('Scoring failed for %s', job_data.get('title'))
+                rejected['scoring_error'] += 1
                 continue
             match = result['match']
             job_data['match_score'] = result['candidate_match_score']
@@ -162,10 +186,15 @@ class JobScraperManager:
             job_data['exp_hard_drop'] = match['experience']['hard_drop']
             job_data['matched_skills'] = match['skills']['matched']
             if not match['eligible']:
+                rejected['ineligible'] += 1
                 continue
             if result['candidate_match_score'] >= min_score:
                 accepted.append(job_data)
+            else:
+                rejected['below_min_score'] += 1
+
         accepted.sort(key=lambda j: j.get('final_score') or 0, reverse=True)
+        self._last_rejections = rejected
         return accepted
 
     def _merge_duplicate(self, existing: Job, job_data: dict, new_source: str):
@@ -185,6 +214,11 @@ class JobScraperManager:
                 src_list = set(json.loads(existing.source_list) or [])
             except (ValueError, TypeError):
                 src_list = set()
+        # Seed with the job's own source. Rows stored before source_list
+        # existed have it empty, so without this a job found by a second
+        # source reports source_count=1 and looks single-sourced.
+        if existing.source:
+            src_list.add(existing.source.lower())
         src_list.add((new_source or '').lower())
         existing.source_list = json.dumps(sorted(s for s in src_list if s))
         existing.source_count = max(1, len(src_list))
@@ -235,6 +269,18 @@ class JobScraperManager:
                 # The same role re-posted with a newer posting date is a repost.
                 existing.possible_repost = True
 
+        # The source's own update time, when it publishes one. Kept separate
+        # from date_posted so an edited listing never reads as a new posting.
+        if job_data.get('source_updated_at'):
+            incoming_update = job_data['source_updated_at']
+            if getattr(incoming_update, 'tzinfo', None) is None:
+                incoming_update = incoming_update.replace(tzinfo=timezone.utc)
+            current_update = existing.source_updated_at
+            if current_update is not None and current_update.tzinfo is None:
+                current_update = current_update.replace(tzinfo=timezone.utc)
+            if current_update is None or incoming_update > current_update:
+                existing.source_updated_at = job_data['source_updated_at']
+
         if not existing.application_url and job_data.get('application_url'):
             existing.application_url = job_data['application_url']
             existing.application_url_status = (
@@ -244,9 +290,16 @@ class JobScraperManager:
             existing.description = job_data['description']
             existing.description_partial = job_data.get('description_partial')
 
-        # Rediscovery: bump scrape time so "today / this week" filters and the
-        # morning briefing treat the job as freshly seen again.
-        existing.date_scraped = datetime.now(timezone.utc)
+        # Rediscovery is recorded in `last_seen` ONLY.
+        #
+        # `date_scraped` / `first_seen` mark when we first discovered the job
+        # and never move again. Bumping them here is what used to make a
+        # 45-day-old posting resurface as "new today" and win the Today
+        # ranking on its rediscovery bonus. Seeing a job again is evidence it
+        # is still open — it is not evidence it was posted again.
+        existing.last_seen = now
+        if existing.date_scraped is None:
+            existing.date_scraped = existing.first_seen or now
         try:
             from services.freshness import evaluate as evaluate_freshness, is_expired
             fresh = evaluate_freshness(existing.date_posted)
@@ -360,16 +413,100 @@ class JobScraperManager:
             location=location,
         ).first()
     
+    @staticmethod
+    def _filter_by_keywords(jobs: List[Dict], keywords: List[str]) -> List[Dict]:
+        """Keep listings whose title or description mentions any keyword.
+
+        Mirrors the per-keyword filtering the full-feed adapters used to do
+        internally, so switching to a single fetch does not widen the result
+        set. With no keywords, everything passes and the downstream scoring
+        gate decides.
+        """
+        if not keywords:
+            return jobs
+        terms = [
+            [w for w in (k or '').lower().split() if len(w) > 2]
+            for k in keywords
+        ]
+        terms = [t for t in terms if t]
+        if not terms:
+            return jobs
+
+        kept, seen = [], set()
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            # Tags matter: RemoteOK and Arbeitnow tag postings with the stack
+            # ("etl", "sql") where the title says only "Engineer", and their
+            # own keyword filters read tags too.
+            tags = job.get('tags') or []
+            if isinstance(tags, (list, tuple)):
+                tags = ' '.join(str(t) for t in tags)
+            haystack = (
+                f"{job.get('title') or ''} {job.get('description') or ''} {tags}"
+            ).lower()
+            if not any(any(w in haystack for w in words) for words in terms):
+                continue
+            key = job.get('job_url') or (job.get('title'), job.get('company'))
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(job)
+        return kept
+
+    @staticmethod
+    def _empty_source_result(source, started_at, run_status, message=None, error=None):
+        """A zero-result outcome that still says *why* it is zero."""
+        completed_at = datetime.now(timezone.utc)
+        return {
+            'source': source,
+            'status': run_status,
+            'message': message,
+            'total_found': 0,
+            'matched_jobs': 0,
+            'new_jobs': 0,
+            'duplicates': 0,
+            'rejected': 0,
+            'rejected_breakdown': {},
+            'missing_apply_url': 0,
+            'avg_match': None,
+            'started_at': started_at.isoformat(),
+            'completed_at': completed_at.isoformat(),
+            'duration_seconds': round((completed_at - started_at).total_seconds(), 1),
+            'errors': [error] if error else [],
+        }
+
     def scrape_source(self, source: str, keywords: List[str], locations: List[str]) -> Dict:
+        started_at = datetime.now(timezone.utc)
+
+        # A source that cannot run is reported as disabled with the reason.
+        # Reporting it as "success, 0 jobs" would hide a missing API key behind
+        # a result that looks legitimate.
+        status = source_health.source_status(source)
+        if not status['enabled']:
+            logger.info('SOURCE SKIPPED %s — %s', source, status['reason'])
+            return self._empty_source_result(
+                source, started_at,
+                run_status=source_health.STATUS_DISABLED,
+                message=status['reason'],
+            )
+
         if source not in self.scrapers:
-            return {'error': f'Unknown source: {source}', 'jobs_found': 0}
-        
+            logger.error('SOURCE ERROR %s — no adapter registered', source)
+            return self._empty_source_result(
+                source, started_at,
+                run_status=source_health.STATUS_FAILED,
+                message=f'Unknown source: {source}',
+                error=f'Unknown source: {source}',
+            )
+
         scraper = self.scrapers[source]
         total_jobs = 0
         new_jobs = 0
         matched_jobs = 0
         duplicates = 0
         missing_apply_url = 0
+        rejected = {}
         match_scores = []
         errors = []
 
@@ -403,6 +540,15 @@ class JobScraperManager:
                         all_jobs = scraper_obj.scrape(keywords=keywords, locations=locations)
                     else:
                         all_jobs = scraper_obj.search_jobs()
+                elif source in getattr(Config, 'FULL_FEED_SOURCES', []):
+                    # These boards ignore the keyword argument and return one
+                    # full feed; the keyword was only ever used to filter the
+                    # response afterwards. Looping over 12 keywords therefore
+                    # re-downloaded the same payload 12 times — for The Muse,
+                    # 432 HTTP round-trips and >10 minutes per run. Fetch once
+                    # and do the keyword filtering locally instead.
+                    all_jobs = scraper.search_jobs()
+                    all_jobs = self._filter_by_keywords(all_jobs, keywords)
                 else:
                     for keyword in keywords:
                         jobs = scraper.search_jobs(keyword=keyword)
@@ -417,6 +563,8 @@ class JobScraperManager:
                     ]
 
                 matched = self._filter_and_score(location_filtered, self.min_match_score)
+                for reason, count in (self._last_rejections or {}).items():
+                    rejected[reason] = rejected.get(reason, 0) + count
                 total_jobs += len(location_filtered)
                 matched_jobs += len(matched)
                 
@@ -524,6 +672,8 @@ class JobScraperManager:
                         
                         # Filter by match score
                         matched = self._filter_and_score(jobs, self.min_match_score)
+                        for reason, count in (self._last_rejections or {}).items():
+                            rejected[reason] = rejected.get(reason, 0) + count
                         total_jobs += len(jobs)
                         matched_jobs += len(matched)
                         
@@ -574,29 +724,66 @@ class JobScraperManager:
                         except Exception:
                             pass
         
+        completed_at = datetime.now(timezone.utc)
+        rejected_total = sum(rejected.values())
+        if errors:
+            run_status = source_health.STATUS_FAILED
+            message = errors[0][:200]
+        elif total_jobs == 0:
+            # Ran cleanly and the board genuinely had nothing for us. That is a
+            # real answer, distinct from "disabled" and from "failed".
+            run_status = source_health.STATUS_EMPTY
+            message = 'Source returned no listings'
+        else:
+            run_status = source_health.STATUS_SUCCESS
+            message = None
+
+        logger.info(
+            'SOURCE COMPLETE %s status=%s discovered=%s accepted=%s new=%s '
+            'duplicates=%s rejected=%s duration=%.1fs',
+            source, run_status, total_jobs, matched_jobs, new_jobs,
+            duplicates, rejected_total, (completed_at - started_at).total_seconds(),
+        )
+
         return {
             'source': source,
+            'status': run_status,
+            'message': message,
             'total_found': total_jobs,
             'matched_jobs': matched_jobs,
             'new_jobs': new_jobs,
             'duplicates': duplicates,
+            'rejected': rejected_total,
+            'rejected_breakdown': dict(rejected),
             'missing_apply_url': missing_apply_url,
             'avg_match': (
                 round(sum(match_scores) / len(match_scores), 1) if match_scores else None
             ),
+            'started_at': started_at.isoformat(),
+            'completed_at': completed_at.isoformat(),
+            'duration_seconds': round((completed_at - started_at).total_seconds(), 1),
             'errors': errors
         }
-    
+
     def _create_job_from_data(self, job_data: dict, source: str) -> Job:
-        """Create a Job model instance from job data dict."""
+        """Create a Job model instance from job data dict.
+
+        Timestamp contract, enforced here and nowhere else:
+
+        * ``date_posted``  — the source's own posting date, or NULL. We never
+          substitute discovery time; an unknown posting date stays unknown.
+        * ``date_posted_origin`` — 'feed' when the source supplied the date,
+          'unknown' when it did not.
+        * ``date_scraped`` / ``first_seen`` — when *we* first saw the job. Set
+          once, never moved.
+        * ``last_seen`` — refreshed on every rediscovery (see
+          ``_merge_duplicate``).
+        """
+        from services.maintenance import live_freshness
+
+        discovered_at = datetime.now(timezone.utc)
         date_posted = job_data.get('date_posted')
-        freshness_hours = None
-        if date_posted:
-            dp = date_posted
-            if dp.tzinfo is None:
-                dp = dp.replace(tzinfo=timezone.utc)
-            delta = datetime.now(timezone.utc) - dp
-            freshness_hours = max(0, int(delta.total_seconds() / 3600))
+        freshness_hours, freshness_bucket = live_freshness(date_posted, now=discovered_at)
 
         job_url = job_data.get('job_url')
         application_url = job_data.get('application_url')
@@ -618,6 +805,7 @@ class JobScraperManager:
             external_id=job_data.get('external_id'),
             match_score=job_data.get('match_score', 0),
             freshness_hours=freshness_hours,
+            freshness_bucket=freshness_bucket,
             market=job_data.get('market'),
             salary_predicted=job_data.get('salary_predicted'),
             description_partial=job_data.get('description_partial'),
@@ -629,10 +817,13 @@ class JobScraperManager:
             date_posted_origin=job_data.get('date_posted_origin') or (
                 'feed' if date_posted else 'unknown'
             ),
+            # Stored only when the source actually published one.
+            source_updated_at=job_data.get('source_updated_at'),
             dedupe_key=build_dedupe_key(job_data),
             verification_status='unverified',
-            first_seen=datetime.now(timezone.utc),
-            last_seen=datetime.now(timezone.utc),
+            date_scraped=discovered_at,
+            first_seen=discovered_at,
+            last_seen=discovered_at,
             source_count=1,
             source_list=json.dumps([(source or '').lower()] if source else []),
         )
@@ -991,6 +1182,15 @@ class JobScraperManager:
                 except Exception:
                     pass
         
+        # Every stored job just got a day older relative to the jobs we merged
+        # in, so recompute the derived freshness columns for the whole table
+        # rather than only for the rows this run touched.
+        try:
+            from services.maintenance import refresh_freshness
+            results['freshness'] = refresh_freshness(self.db_session)
+        except Exception:
+            logger.exception('Post-scrape freshness refresh failed')
+
         results['completed_at'] = datetime.now(timezone.utc).isoformat()
         self._finish_search_run(search_run, results)
 
@@ -1020,16 +1220,36 @@ class JobScraperManager:
 
     def _record_source_run(self, search_run, source, result):
         try:
+            status = result.get('status')
+            if not status:
+                status = (
+                    source_health.STATUS_FAILED
+                    if (result.get('errors') or result.get('error'))
+                    else source_health.STATUS_SUCCESS
+                )
+            started_at = result.get('started_at')
+            if isinstance(started_at, str):
+                try:
+                    started_at = datetime.fromisoformat(started_at)
+                except ValueError:
+                    started_at = None
+
             row = SourceRun(
                 search_run_id=search_run.id if search_run is not None else None,
                 source=source,
-                status='failed' if result.get('errors') or result.get('error') else 'success',
+                status=status,
                 jobs_discovered=result.get('total_found', 0),
                 jobs_accepted=result.get('new_jobs', 0),
+                jobs_matched=result.get('matched_jobs', 0),
+                jobs_rejected=result.get('rejected', 0),
+                rejected_breakdown=json.dumps(result.get('rejected_breakdown') or {}),
                 duplicates=result.get('duplicates', 0),
                 missing_apply_url=result.get('missing_apply_url', 0),
                 avg_match=result.get('avg_match'),
+                duration_seconds=result.get('duration_seconds'),
+                message=result.get('message'),
                 error_message='; '.join(result.get('errors') or [])[:2000] or None,
+                started_at=started_at or datetime.now(timezone.utc),
                 completed_at=datetime.now(timezone.utc),
             )
             self.db_session.add(row)
@@ -1055,6 +1275,20 @@ class JobScraperManager:
             ]
             discovered = sum(d.get('total_found', 0) for d in per_source.values())
             duplicates = sum(d.get('duplicates', 0) for d in per_source.values())
+            matched = sum(d.get('matched_jobs', 0) for d in per_source.values())
+            rejected = sum(d.get('rejected', 0) for d in per_source.values())
+            stale = sum(
+                (d.get('rejected_breakdown') or {}).get('too_old', 0)
+                for d in per_source.values()
+            )
+            disabled = sum(
+                1 for d in per_source.values()
+                if d.get('status') == source_health.STATUS_DISABLED
+            )
+            failed = sum(
+                1 for d in per_source.values()
+                if d.get('status') == source_health.STATUS_FAILED
+            )
             averages = [
                 d['avg_match'] for d in per_source.values()
                 if d.get('avg_match') is not None
@@ -1072,6 +1306,11 @@ class JobScraperManager:
             search_run.status = 'completed'
             search_run.jobs_discovered = discovered
             search_run.jobs_accepted = results.get('total_new_jobs', 0)
+            search_run.jobs_matched = matched
+            search_run.jobs_rejected = rejected
+            search_run.jobs_stale = stale
+            search_run.sources_disabled = disabled
+            search_run.sources_failed = failed
             search_run.duplicates = duplicates
             search_run.avg_match = (
                 round(sum(averages) / len(averages), 1) if averages else None

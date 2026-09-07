@@ -310,7 +310,15 @@
     font-size: 0.88rem;
 }
 
-.application-table-wrap, .source-metrics-wrap { overflow-x: auto; }
+/* The table scrolls inside its wrapper instead of widening the page.
+   `max-width: 100%` plus `min-width: 0` are both required: a flex/grid child
+   defaults to `min-width: auto`, so without them the wrapper grows to fit the
+   table and pushes the whole layout sideways on a phone. */
+.application-table-wrap, .source-metrics-wrap {
+    overflow-x: auto;
+    max-width: 100%;
+    min-width: 0;
+}
 
 .application-table {
     width: 100%;
@@ -406,6 +414,99 @@
 .pill-yellow { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
 .pill-red    { background: rgba(239, 68, 68, 0.18); color: #f87171; }
 .pill-warn   { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+.pill-ok     { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+.pill-risk   { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+.pill-info   { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+.pill-muted  { background: var(--bg-tertiary); color: var(--text-muted); }
+
+/* Inline notices (disabled sources, config gaps) and actionable empty states. */
+.notice {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+.notice-info {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: var(--text-secondary);
+}
+.notice-list { margin: 6px 0 6px 18px; padding: 0; }
+.notice-list li { margin-bottom: 3px; }
+
+/* Scraper page: last-run + scheduler summary. */
+.last-scrape-panel:empty { display: none; }
+.scrape-status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    font-size: 0.86rem;
+    line-height: 1.6;
+}
+.scrape-status-label {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+.scrape-status-side { text-align: right; }
+
+/* A source that cannot run is shown, but not selectable. */
+.checkbox-label.is-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.loading-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 48px 16px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.empty-state.error-state i { color: #f87171; }
+.empty-state.error-state .btn { margin-top: 12px; }
+
+.empty-suggestions {
+    margin: 12px auto 0;
+    padding-left: 20px;
+    text-align: left;
+    max-width: 460px;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+    line-height: 1.7;
+}
+
+/* Source health summary line on the Insights / Scraper pages. */
+.health-banner {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-left: auto;
+}
+.health-banner.risk { color: #f87171; }
+
+/* Source health table: keep the reason legible under the source name. */
+.source-metrics-wrap .muted-note {
+    display: block;
+    margin-top: 2px;
+    max-width: 34ch;
+    line-height: 1.35;
+    white-space: normal;
+}
 
 /* Phase 2/9/10 recommendation + readiness + effort chips */
 .smart-recs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
@@ -628,7 +729,36 @@
     .smart-head { flex-direction: column; }
     .breakdown-row { grid-template-columns: 100px 1fr 30px; }
     .briefing-header { flex-direction: column; }
+
+    /* Section headers carry the source-health summary; let it wrap under the
+       title instead of squeezing the heading. */
+    .section-header { flex-wrap: wrap; }
+    .health-banner { margin-left: 0; width: 100%; margin-top: 4px; }
+
+    /* Wide tables scroll horizontally inside their own wrapper rather than
+       pushing the page sideways. */
+    .application-table-wrap,
+    .source-metrics-wrap { -webkit-overflow-scrolling: touch; }
+    .application-table { min-width: 640px; }
+    .source-metrics-wrap .muted-note { max-width: 26ch; }
+
+    /* Card actions stack instead of overflowing the card. */
+    .smart-actions { flex-wrap: wrap; }
+    .smart-actions .btn { flex: 1 1 auto; }
+    .smart-meta { gap: 6px 10px; }
+    .briefing-tile { min-width: 0; }
+    .empty-suggestions { max-width: 100%; }
+    .notice { flex-direction: column; }
 }
+
+/* Nothing may push the page sideways on a narrow screen. `.main-content` is a
+   flex child, so it needs min-width:0 or a wide descendant grows it past the
+   viewport instead of being clipped. */
+.main-content { min-width: 0; max-width: 100%; }
+.view, .card, .smart-card { max-width: 100%; min-width: 0; }
+.view { overflow-x: hidden; }
+.smart-card .smart-title { overflow-wrap: anywhere; }
+.smart-meta span { overflow-wrap: anywhere; }
 
 .filter-toggles {
     display: flex;

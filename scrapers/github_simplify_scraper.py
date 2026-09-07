@@ -195,8 +195,18 @@ class GithubSimplifyScraper(BaseScraper):
         if not self._location_ok(location):
             return None
 
-        date_posted = self._parse_ts(listing.get('date_posted') or listing.get('date_updated'))
-        if date_posted and not self._is_recent(date_posted):
+        # `date_posted` and `date_updated` are different facts and are kept
+        # apart. A listing edited today was not posted today, so the update
+        # timestamp must never stand in for the posting date — that is what
+        # made re-touched entries look brand new. When the feed gives only an
+        # update time we store the posting date as unknown and say so.
+        date_posted = self._parse_ts(listing.get('date_posted'))
+        date_updated = self._parse_ts(listing.get('date_updated'))
+
+        # Age is judged on whichever real timestamp we have: a listing whose
+        # only evidence of life is an update three months ago is not current.
+        newest = max([d for d in (date_posted, date_updated) if d], default=None)
+        if newest and not self._is_recent(newest):
             return None
 
         sponsorship = (listing.get('sponsorship') or '').strip()
@@ -235,6 +245,8 @@ class GithubSimplifyScraper(BaseScraper):
             market='US',
             description_partial=True,
         )
+        job['date_posted_origin'] = 'feed' if date_posted else 'unknown'
+        job['source_updated_at'] = date_updated
         # Soft signal for OPT enrichment
         if sponsorship and 'does not offer sponsorship' in sponsorship.lower():
             job['sponsorship_hint'] = 'no_sponsorship'

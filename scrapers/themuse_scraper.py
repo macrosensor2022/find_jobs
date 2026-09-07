@@ -7,8 +7,11 @@ Filtered to USA-based entry-level / full-time positions
 
 from .base_scraper import BaseScraper
 from datetime import datetime, timedelta, timezone
+import logging
 import urllib.parse
 import time
+
+logger = logging.getLogger(__name__)
 
 US_LOCATION_KEYWORDS = [
     'united states', 'usa', 'u.s.', 'remote',
@@ -65,12 +68,24 @@ class TheMuseScraper(BaseScraper):
         return date_posted >= cutoff
 
     def _fetch_and_filter(self, params, keyword, all_jobs, counters):
-        """Fetch one API page and filter results."""
+        """Fetch one API page and filter results.
+
+        Failures are contained here. A read timeout on page 20 of 36 used to
+        propagate out of the whole category/location sweep and discard every
+        job already collected, so one slow response turned a good run into
+        zero results.
+        """
         url = f"{self.api_url}?{urllib.parse.urlencode(params, doseq=True)}"
-        response = self.safe_get(url, timeout=30)
-        if response.status_code != 200:
+        try:
+            response = self.safe_get(url, timeout=30)
+            if response.status_code != 200:
+                counters['errors'] = counters.get('errors', 0) + 1
+                return
+            data = response.json()
+        except Exception as exc:
+            counters['errors'] = counters.get('errors', 0) + 1
+            logger.warning('The Muse page failed (%s): %s', params.get('category'), exc)
             return
-        data = response.json()
         for job_data in data.get('results', []):
             parsed = self.parse_job_listing(job_data)
             if not parsed:
@@ -112,7 +127,7 @@ class TheMuseScraper(BaseScraper):
             ]
 
             all_jobs = []
-            counters = {'non_us': 0, 'old': 0}
+            counters = {'non_us': 0, 'old': 0, 'errors': 0}
 
             for level in ['Entry Level']:
                 for us_loc in us_api_locations:
@@ -132,12 +147,16 @@ class TheMuseScraper(BaseScraper):
                     seen_urls.add(job['job_url'])
                     jobs.append(job)
 
-            print(f"The Muse: Found {len(jobs)} USA jobs" +
-                  (f" matching '{keyword}'" if keyword else "") +
-                  f" (skipped {counters['non_us']} non-US, {counters['old']} old)")
+            logger.info(
+                "The Muse: found %d USA jobs%s (skipped %d non-US, %d old, "
+                "%d pages failed)",
+                len(jobs), f" matching '{keyword}'" if keyword else '',
+                counters['non_us'], counters['old'], counters['errors'],
+            )
 
         except Exception as e:
-            print(f"Error fetching The Muse jobs: {e}")
+            # Whatever was already collected above is still returned.
+            logger.error('The Muse sweep aborted: %s', e)
 
         return jobs
 

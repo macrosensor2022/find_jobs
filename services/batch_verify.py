@@ -17,23 +17,35 @@ logger = logging.getLogger(__name__)
 
 
 def select_jobs_to_verify(Job, limit: int = None, include_stale: bool = True) -> List:
-    """Pick top realistic jobs that need a live URL check."""
-    limit = limit or int(getattr(Config, 'VERIFY_TOP_N', 15))
-    query = applyable_query(Job, realistic=True).filter(
+    """Pick the jobs whose apply links the user is about to look at.
+
+    Ordered by the *Today* ranking rather than by raw ``final_score``, so the
+    links we spend checks on are the ones actually on screen. Verifying by
+    final_score meant the Today list stayed almost entirely "Unable to verify"
+    while budget went to jobs further down the Jobs page.
+    """
+    from services.briefing import today_rank_score
+
+    limit = limit or int(getattr(Config, 'VERIFY_TOP_N', 25))
+    candidates = applyable_query(Job, realistic=True).filter(
         Job.application_url.isnot(None),
         Job.application_url != '',
     ).order_by(
         Job.final_score.desc().nullslast(),
         Job.candidate_match_score.desc().nullslast(),
-    ).limit(max(limit * 3, limit))
+    ).limit(max(limit * 4, 60)).all()
+
+    candidates.sort(key=lambda j: -today_rank_score(j))
 
     selected = []
-    for job in query.all():
+    for job in candidates:
         status = (job.application_url_status or 'unknown').lower()
         if status == 'verified' and not (
             include_stale and needs_reverification(job.last_verified_at)
         ):
             continue
+        # A dead link stays dead until the posting is rediscovered; re-checking
+        # it every run wastes the budget that fresh links need.
         if status == 'dead':
             continue
         selected.append(job)
@@ -48,6 +60,8 @@ def verify_jobs(jobs: Iterable, session=None, commit_every: int = 5) -> dict:
         'checked': 0,
         'verified': 0,
         'dead': 0,
+        'blocked': 0,
+        'redirected': 0,
         'unreachable': 0,
         'unknown': 0,
         'details': [],
@@ -66,6 +80,10 @@ def verify_jobs(jobs: Iterable, session=None, commit_every: int = 5) -> dict:
             summary['verified'] += 1
         elif status == 'dead':
             summary['dead'] += 1
+        elif status == 'blocked':
+            summary['blocked'] += 1
+        elif status == 'redirected':
+            summary['redirected'] += 1
         elif status == 'unverified':
             summary['unreachable'] += 1
         else:
@@ -100,8 +118,10 @@ def verify_jobs(jobs: Iterable, session=None, commit_every: int = 5) -> dict:
                 pass
 
     logger.info(
-        'Batch verify: checked=%s verified=%s dead=%s unreachable=%s',
-        summary['checked'], summary['verified'], summary['dead'], summary['unreachable'],
+        'VERIFICATION RESULT checked=%s verified=%s dead=%s blocked=%s '
+        'redirected=%s unreachable=%s',
+        summary['checked'], summary['verified'], summary['dead'],
+        summary['blocked'], summary['redirected'], summary['unreachable'],
     )
     return summary
 
